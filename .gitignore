@@ -1,0 +1,6 @@
+
+.env
+store.db
+static/uploads/
+__pycache__/
+*.pyc
