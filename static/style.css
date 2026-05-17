@@ -3271,3 +3271,17 @@ select option {
         position: static !important;
     }
 }
+.show-password-row {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    margin: 12px 0 18px !important;
+    font-size: 14px !important;
+    color: rgba(255,255,255,0.85) !important;
+    cursor: pointer !important;
+}
+
+.show-password-row input {
+    width: auto !important;
+    margin: 0 !important;
+}
