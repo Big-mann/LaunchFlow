@@ -3439,3 +3439,81 @@ select option {
     }
 
 }
+.storefront-hero-actions {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 24px;
+}
+
+.chat-active-view {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-active-header {
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 20px;
+}
+
+.chat-active-header span {
+    display: block;
+    margin-top: 4px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.6);
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-right: 4px;
+}
+
+.chat-message {
+    max-width: 78%;
+    padding: 14px 16px;
+    border-radius: 18px;
+    line-height: 1.5;
+    font-size: 14px;
+}
+
+.chat-message.seller {
+    background: rgba(255,255,255,0.08);
+    align-self: flex-start;
+}
+
+.chat-message.buyer {
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    align-self: flex-end;
+}
+
+.chat-input-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.chat-input-row input {
+    flex: 1;
+    border: none;
+    border-radius: 14px;
+    padding: 14px;
+    background: rgba(255,255,255,0.08);
+    color: white;
+}
+
+.chat-input-row button {
+    border: none;
+    border-radius: 14px;
+    padding: 0 18px;
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    font-weight: 700;
+    cursor: pointer;
+}
