@@ -3285,235 +3285,254 @@ select option {
     width: auto !important;
     margin: 0 !important;
 }
+
+/* SELLER MESSAGE BUTTONS */
+
+.storefront-hero-actions {
+    display: flex !important;
+    gap: 14px !important;
+    flex-wrap: wrap !important;
+    margin-top: 24px !important;
+}
+
+.storefront-product-actions {
+    display: flex !important;
+    gap: 10px !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+}
+
+.storefront-product-actions .button,
+.storefront-product-actions button {
+    display: inline-flex !important;
+    width: auto !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
 /* CHAT SYSTEM */
 
 .chat-launcher {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    width: 64px;
-    height: 64px;
-    border-radius: 999px;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    cursor: pointer;
-    z-index: 9999;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.35);
-    transition: 0.2s ease;
+    position: fixed !important;
+    bottom: 24px !important;
+    right: 24px !important;
+    width: 64px !important;
+    height: 64px !important;
+    border-radius: 999px !important;
+    background: linear-gradient(135deg, #7c3aed, #2563eb) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 28px !important;
+    cursor: pointer !important;
+    z-index: 999999 !important;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.35) !important;
+    transition: 0.2s ease !important;
 }
 
 .chat-launcher:hover {
-    transform: translateY(-3px) scale(1.04);
+    transform: translateY(-3px) scale(1.04) !important;
 }
 
 .chat-notification-dot {
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    min-width: 24px;
-    height: 24px;
-    border-radius: 999px;
-    background: #ef4444;
-    color: white;
-    font-size: 12px;
-    font-weight: 800;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 6px;
+    position: absolute !important;
+    top: -4px !important;
+    right: -4px !important;
+    min-width: 24px !important;
+    height: 24px !important;
+    border-radius: 999px !important;
+    background: #ef4444 !important;
+    color: white !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 6px !important;
 }
 
 .chat-window {
-    position: fixed;
-    bottom: 100px;
-    right: 24px;
-    width: 380px;
-    height: 560px;
-    background: #0f172a;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 24px;
-    overflow: hidden;
-    display: none;
-    flex-direction: column;
-    z-index: 9998;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    position: fixed !important;
+    bottom: 100px !important;
+    right: 24px !important;
+    width: 380px !important;
+    height: 560px !important;
+    background: #0f172a !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+    border-radius: 24px !important;
+    overflow: hidden !important;
+    display: none !important;
+    flex-direction: column !important;
+    z-index: 999998 !important;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5) !important;
+    color: white !important;
 }
 
 .chat-window.open {
-    display: flex;
+    display: flex !important;
 }
 
 .chat-window.expanded {
-    width: min(1100px, calc(100vw - 40px));
-    height: min(760px, calc(100vh - 40px));
-    bottom: 20px;
-    right: 20px;
+    width: min(1100px, calc(100vw - 40px)) !important;
+    height: min(760px, calc(100vh - 40px)) !important;
+    bottom: 20px !important;
+    right: 20px !important;
 }
 
 .chat-header {
-    height: 72px;
-    padding: 18px 20px;
-    background: rgba(255,255,255,0.04);
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    height: 72px !important;
+    padding: 18px 20px !important;
+    background: rgba(255,255,255,0.04) !important;
+    border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
 }
 
 .chat-header p {
-    margin: 4px 0 0;
-    font-size: 13px;
-    color: rgba(255,255,255,0.6);
+    margin: 4px 0 0 !important;
+    font-size: 13px !important;
+    color: rgba(255,255,255,0.6) !important;
 }
 
 .chat-header-actions {
-    display: flex;
-    gap: 8px;
+    display: flex !important;
+    gap: 8px !important;
 }
 
 .chat-header-actions button {
-    width: 38px;
-    height: 38px;
-    border-radius: 12px;
-    border: none;
-    background: rgba(255,255,255,0.08);
-    color: white;
-    cursor: pointer;
-    font-size: 16px;
+    width: 38px !important;
+    height: 38px !important;
+    border-radius: 12px !important;
+    border: none !important;
+    background: rgba(255,255,255,0.08) !important;
+    color: white !important;
+    cursor: pointer !important;
+    font-size: 16px !important;
+    padding: 0 !important;
 }
 
 .chat-sidebar {
-    width: 100%;
-    padding: 14px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    width: 100% !important;
+    padding: 14px !important;
+    border-bottom: 1px solid rgba(255,255,255,0.08) !important;
 }
 
 .chat-conversation {
-    padding: 14px;
-    border-radius: 16px;
-    background: rgba(255,255,255,0.05);
+    padding: 14px !important;
+    border-radius: 16px !important;
+    background: rgba(255,255,255,0.05) !important;
 }
 
 .chat-conversation span {
-    display: block;
-    margin-top: 6px;
-    color: rgba(255,255,255,0.65);
-    font-size: 13px;
+    display: block !important;
+    margin-top: 6px !important;
+    color: rgba(255,255,255,0.65) !important;
+    font-size: 13px !important;
 }
 
 .chat-main {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 30px;
-    text-align: center;
+    flex: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 30px !important;
+    text-align: center !important;
 }
 
 .chat-empty-state h3 {
-    margin-bottom: 10px;
+    margin-bottom: 10px !important;
 }
 
 .chat-empty-state p {
-    color: rgba(255,255,255,0.65);
-    line-height: 1.6;
-}
-
-@media (max-width: 700px) {
-
-    .chat-window {
-        width: calc(100vw - 20px);
-        height: 70vh;
-        right: 10px;
-        bottom: 88px;
-    }
-
-    .chat-window.expanded {
-        width: calc(100vw - 10px);
-        height: calc(100vh - 10px);
-        right: 5px;
-        bottom: 5px;
-    }
-
-}
-.storefront-hero-actions {
-    display: flex;
-    gap: 14px;
-    flex-wrap: wrap;
-    margin-top: 24px;
+    color: rgba(255,255,255,0.65) !important;
+    line-height: 1.6 !important;
 }
 
 .chat-active-view {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
+    width: 100% !important;
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
 }
 
 .chat-active-header {
-    padding-bottom: 16px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-    margin-bottom: 20px;
+    padding-bottom: 16px !important;
+    border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+    margin-bottom: 20px !important;
 }
 
 .chat-active-header span {
-    display: block;
-    margin-top: 4px;
-    font-size: 13px;
-    color: rgba(255,255,255,0.6);
+    display: block !important;
+    margin-top: 4px !important;
+    font-size: 13px !important;
+    color: rgba(255,255,255,0.6) !important;
 }
 
 .chat-messages {
-    flex: 1;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding-right: 4px;
+    flex: 1 !important;
+    overflow-y: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 14px !important;
+    padding-right: 4px !important;
 }
 
 .chat-message {
-    max-width: 78%;
-    padding: 14px 16px;
-    border-radius: 18px;
-    line-height: 1.5;
-    font-size: 14px;
+    max-width: 78% !important;
+    padding: 14px 16px !important;
+    border-radius: 18px !important;
+    line-height: 1.5 !important;
+    font-size: 14px !important;
 }
 
 .chat-message.seller {
-    background: rgba(255,255,255,0.08);
-    align-self: flex-start;
+    background: rgba(255,255,255,0.08) !important;
+    align-self: flex-start !important;
 }
 
 .chat-message.buyer {
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    align-self: flex-end;
+    background: linear-gradient(135deg, #7c3aed, #2563eb) !important;
+    align-self: flex-end !important;
 }
 
 .chat-input-row {
-    display: flex;
-    gap: 10px;
-    margin-top: 20px;
+    display: flex !important;
+    gap: 10px !important;
+    margin-top: 20px !important;
 }
 
 .chat-input-row input {
-    flex: 1;
-    border: none;
-    border-radius: 14px;
-    padding: 14px;
-    background: rgba(255,255,255,0.08);
-    color: white;
+    flex: 1 !important;
+    border: none !important;
+    border-radius: 14px !important;
+    padding: 14px !important;
+    background: rgba(255,255,255,0.08) !important;
+    color: white !important;
 }
 
 .chat-input-row button {
-    border: none;
-    border-radius: 14px;
-    padding: 0 18px;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    color: white;
-    font-weight: 700;
-    cursor: pointer;
+    border: none !important;
+    border-radius: 14px !important;
+    padding: 0 18px !important;
+    background: linear-gradient(135deg, #7c3aed, #2563eb) !important;
+    color: white !important;
+    font-weight: 700 !important;
+    cursor: pointer !important;
+}
+
+@media (max-width: 700px) {
+    .chat-window {
+        width: calc(100vw - 20px) !important;
+        height: 70vh !important;
+        right: 10px !important;
+        bottom: 88px !important;
+    }
+
+    .chat-window.expanded {
+        width: calc(100vw - 10px) !important;
+        height: calc(100vh - 10px) !important;
+        right: 5px !important;
+        bottom: 5px !important;
+    }
 }
