@@ -175,11 +175,47 @@ def init_db():
         store_item_id INTEGER,
         amount REAL,
         customer_email TEXT,
+        customer_name TEXT DEFAULT '',
+        quantity INTEGER DEFAULT 1,
+        shipping_name TEXT DEFAULT '',
+        shipping_address_line1 TEXT DEFAULT '',
+        shipping_address_line2 TEXT DEFAULT '',
+        shipping_city TEXT DEFAULT '',
+        shipping_state TEXT DEFAULT '',
+        shipping_postal_code TEXT DEFAULT '',
+        shipping_country TEXT DEFAULT '',
         stripe_session_id TEXT DEFAULT '',
         payment_status TEXT DEFAULT '',
         tracking_number TEXT DEFAULT '',
         shipping_carrier TEXT DEFAULT '',
         shipping_status TEXT DEFAULT 'Not shipped yet',
+        fulfillment_status TEXT DEFAULT 'New order',
+        buyer_message TEXT DEFAULT '',
+        seller_notes TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        buyer_email TEXT,
+        seller_id INTEGER,
+        store_id INTEGER,
+        order_id INTEGER,
+        subject TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER,
+        sender_type TEXT,
+        sender_user_id INTEGER DEFAULT 0,
+        sender_email TEXT DEFAULT '',
+        message TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -207,6 +243,18 @@ def init_db():
     add_column_if_missing(cur, "orders", "tracking_number", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "orders", "shipping_carrier", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "orders", "shipping_status", "TEXT DEFAULT 'Not shipped yet'")
+    add_column_if_missing(cur, "orders", "customer_name", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "quantity", "INTEGER DEFAULT 1")
+    add_column_if_missing(cur, "orders", "shipping_name", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "shipping_address_line1", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "shipping_address_line2", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "shipping_city", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "shipping_state", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "shipping_postal_code", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "shipping_country", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "fulfillment_status", "TEXT DEFAULT 'New order'")
+    add_column_if_missing(cur, "orders", "buyer_message", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "orders", "seller_notes", "TEXT DEFAULT ''")
 
     conn.commit()
     conn.close()
@@ -363,19 +411,204 @@ def layout(content, title="LaunchFlow"):
             <a href="/refunds">Refunds</a>
         </footer>
 
+        <!-- FLOATING CHAT -->
+
+        <button
+            id="chat-launcher"
+            class="chat-launcher hidden"
+            type="button"
+        >
+            💬
+
+            <span
+                id="chat-notification-count"
+                class="chat-notification-dot hidden"
+            >
+                0
+            </span>
+        </button>
+
+        <!-- CHAT WINDOW -->
+
+        <div id="chat-window" class="chat-window">
+
+            <div class="chat-header">
+
+                <div>
+                    <strong id="chat-title">
+                        LaunchFlow Messages
+                    </strong>
+
+                    <p id="chat-subtitle">
+                        Seller conversation
+                    </p>
+                </div>
+
+                <div class="chat-header-actions">
+
+                    <button
+                        type="button"
+                        onclick="expandChatWindow()"
+                    >
+                        ⛶
+                    </button>
+
+                    <button
+                        type="button"
+                        onclick="closeChatWindow()"
+                    >
+                        ✕
+                    </button>
+
+                </div>
+
+            </div>
+
+            <div class="chat-main" id="chat-main">
+
+                <div class="chat-empty-state">
+
+                    <h3>
+                        Start a conversation
+                    </h3>
+
+                    <p>
+                        Message sellers directly through LaunchFlow.
+                    </p>
+
+                </div>
+
+            </div>
+
+        </div>
+
         <script>
+
+            // MONEY INPUTS
+
             document.querySelectorAll(".money-input").forEach(input => {{
+
                 input.addEventListener("input", () => {{
+
                     let value = input.value.replace(/[^0-9.]/g, "");
-                    input.value = value ? "$" + value : "";
+
+                    input.value = value
+                        ? "$" + value
+                        : "";
+
                 }});
+
             }});
+
+            // CHAT SYSTEM
+
+            const chatLauncher =
+                document.getElementById("chat-launcher");
+
+            const chatWindow =
+                document.getElementById("chat-window");
+
+            const chatMain =
+                document.getElementById("chat-main");
+
+            function openSellerChat(
+                sellerId,
+                storeName
+            ) {{
+
+                chatLauncher.classList.remove("hidden");
+
+                chatWindow.classList.add("open");
+
+                document.getElementById("chat-title").textContent =
+                    storeName;
+
+                document.getElementById("chat-subtitle").textContent =
+                    "Seller conversation";
+
+                chatMain.innerHTML = `
+
+                    <div class="chat-active-view">
+
+                        <div class="chat-messages">
+
+                            <div class="chat-message seller">
+                                Hi! How can I help you today?
+                            </div>
+
+                        </div>
+
+                        <form
+                            class="chat-input-row"
+                            onsubmit="event.preventDefault();"
+                        >
+
+                            <input
+                                type="text"
+                                placeholder="Type a message..."
+                            >
+
+                            <button type="submit">
+                                Send
+                            </button>
+
+                        </form>
+
+                    </div>
+
+                `;
+
+            }}
+
+            chatLauncher.addEventListener("click", () => {{
+
+                if (
+                    chatWindow.classList.contains("open")
+                ) {{
+
+                    chatWindow.classList.remove("open");
+
+                }}
+
+                else {{
+
+                    chatWindow.classList.add("open");
+
+                }}
+
+            }});
+
+            function closeChatWindow() {{
+
+                chatWindow.classList.remove("open");
+
+                chatWindow.classList.remove("expanded");
+
+            }}
+
+            function expandChatWindow() {{
+
+                if (
+                    chatWindow.classList.contains("expanded")
+                ) {{
+
+                    chatWindow.classList.remove("expanded");
+
+                }}
+
+                else {{
+
+                    chatWindow.classList.add("expanded");
+
+                }}
+
+            }}
+
         </script>
 
     </body>
     </html>
     """
-
 
 
 def top_nav(user):
@@ -753,10 +986,15 @@ def signup_page(error: str = ""):
                 <input name="email" type="email" required placeholder="you@example.com">
 
                 <label>Password</label>
-                <input name="password" type="password" required placeholder="Create password">
+                <input id="signup-password" name="password" type="password" required placeholder="Create password">
 
                 <label>Confirm Password</label>
-                <input name="confirm_password" type="password" required placeholder="Confirm password">
+                <input id="signup-confirm-password" name="confirm_password" type="password" required placeholder="Confirm password">
+
+                <label class="show-password-row">
+                    <input id="signup-show-passwords" type="checkbox">
+                    <span>Show passwords</span>
+                </label>
 
                 <button type="submit">Create Account</button>
             </form>
@@ -764,6 +1002,18 @@ def signup_page(error: str = ""):
             <p class="auth-switch">Already have an account? <a href="/login">Log in</a></p>
         </div>
     </div>
+
+    <script>
+        const signupToggle = document.getElementById("signup-show-passwords");
+        const signupPassword = document.getElementById("signup-password");
+        const signupConfirmPassword = document.getElementById("signup-confirm-password");
+
+        signupToggle.addEventListener("change", function () {{
+            const inputType = this.checked ? "text" : "password";
+            signupPassword.type = inputType;
+            signupConfirmPassword.type = inputType;
+        }});
+    </script>
     """)
 
 
@@ -819,7 +1069,12 @@ def login_page(error: str = ""):
                 <input name="email" type="email" required placeholder="you@example.com">
 
                 <label>Password</label>
-                <input name="password" type="password" required placeholder="Enter password">
+                <input id="login-password" name="password" type="password" required placeholder="Enter password">
+
+                <label class="show-password-row">
+                    <input id="login-show-password" type="checkbox">
+                    <span>Show password</span>
+                </label>
 
                 <button type="submit">Log In</button>
             </form>
@@ -827,6 +1082,15 @@ def login_page(error: str = ""):
             <p class="auth-switch">New here? <a href="/signup">Start Free</a></p>
         </div>
     </div>
+
+    <script>
+        const loginToggle = document.getElementById("login-show-password");
+        const loginPassword = document.getElementById("login-password");
+
+        loginToggle.addEventListener("change", function () {{
+            loginPassword.type = this.checked ? "text" : "password";
+        }});
+    </script>
     """)
 
 
@@ -1353,6 +1617,38 @@ def ai_builder(request: Request):
         }});
     </script>
     """)
+def make_unique_store_identity(name):
+    clean_name = (name or "AI Store").strip() or "AI Store"
+    base_name = clean_name
+    base_slug = slugify(base_name) or "ai-store"
+
+    conn = db()
+    cur = conn.cursor()
+
+    final_name = base_name
+    final_slug = base_slug
+    counter = 2
+
+    while True:
+        cur.execute(
+            "SELECT id FROM products WHERE LOWER(name) = LOWER(?) OR slug = ?",
+            (final_name, final_slug)
+        )
+
+        existing = cur.fetchone()
+
+        if not existing:
+            break
+
+        final_name = f"{base_name} {counter}"
+        final_slug = f"{base_slug}-{counter}"
+        counter += 1
+
+    conn.close()
+
+    return final_name, final_slug
+
+
 @app.post("/ai-generate")
 def ai_generate(
     request: Request,
@@ -1383,96 +1679,27 @@ def ai_generate(
 
     conn.close()
 
-    idea_lower = product_idea.lower()
-    vibe_lower = vibe.lower()
+    ai_data = demo_ai_generate(product_idea, audience, vibe)
 
-    if any(word in idea_lower or word in vibe_lower for word in ["car", "cars", "lambo", "lamborghini", "auto", "garage", "vehicle"]):
-        template_type = "garage"
-        theme = "dark"
-    elif any(word in idea_lower or word in vibe_lower for word in ["food", "kitchen", "bowl", "natural", "green", "organic"]):
-        template_type = "manual"
-        theme = "green"
-    elif any(word in vibe_lower for word in ["luxury", "premium", "dark", "black"]):
-        template_type = "manual"
-        theme = "dark"
-    elif any(word in vibe_lower for word in ["purple", "fashion", "beauty"]):
-        template_type = "manual"
-        theme = "purple"
-    else:
-        template_type = "manual"
-        theme = "blue"
+    generated_name = ai_data.get("store_name", product_idea.title() + " Store")
+    final_name, final_slug = make_unique_store_identity(generated_name)
 
-    prompt = f"""
-    Create a high-converting ecommerce store concept.
+    ai_data["store_name"] = final_name
+    ai_data["slug"] = final_slug
 
-    Product idea: {product_idea}
-    Audience: {audience}
-    Vibe: {vibe}
-
-    Return ONLY valid JSON with these exact keys:
-    name, tagline, description, hero_title, hero_subtitle, brand_direction
-
-    Keep it clean, brandable, and realistic.
-    """
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You create premium ecommerce store concepts. Return only valid JSON."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-
-        raw = response.choices[0].message.content.strip()
-
-        if raw.startswith("```"):
-            raw = raw.replace("```json", "").replace("```", "").strip()
-
-        data = json.loads(raw)
-
-    except Exception as e:
-        print("AI GENERATE ERROR:", e)
-
-        clean_name = product_idea.strip().title() or "AI Store"
-
-        data = {
-            "name": clean_name,
-            "tagline": f"Built for {audience or 'modern shoppers'}",
-            "description": f"A branded store focused on {product_idea}.",
-            "hero_title": clean_name,
-            "hero_subtitle": f"A fresh shopping experience for {audience or 'modern shoppers'}.",
-            "brand_direction": vibe or "Clean, modern, and premium."
-        }
-
-    ai_design = json.dumps({
-        "template_type": template_type,
-        "product_idea": product_idea,
-        "audience": audience,
-        "vibe": vibe,
-        "hero_title": data.get("hero_title", data.get("name", product_idea.title())),
-        "hero_subtitle": data.get("hero_subtitle", data.get("tagline", "")),
-        "brand_direction": data.get("brand_direction", vibe),
-        "generated_by_ai": True
-    })
+    ai_design = json.dumps(ai_data)
 
     return create_store(
         request=request,
-        name=data.get("name", product_idea.title() + " Store"),
-        slug="",
-        tagline=data.get("tagline", ""),
-        description=data.get("description", ""),
+        name=final_name,
+        slug=final_slug,
+        tagline=ai_data.get("tagline", ""),
+        description=ai_data.get("homepage_copy", ai_data.get("hero_subheadline", "")),
         price="0",
         stock="0",
         image_url="",
-        cta="Add Product",
-        theme=theme,
+        cta=ai_data.get("cta", "Add Product"),
+        theme=ai_data.get("theme", "blue"),
         source="ai",
         ai_design=ai_design
     )
@@ -2087,7 +2314,11 @@ def public_store(request: Request, slug: str):
     font_style = ai_design.get("font_style", "modern")
     accent_color = ai_design.get("accent_color", "#7c3aed")
     secondary_color = ai_design.get("secondary_color", "#06b6d4")
-    trust_badges = ai_design.get("trust_badges", ["Premium storefront", "Ready to sell", "Secure checkout"])
+
+    trust_badges = ai_design.get(
+        "trust_badges",
+        ["Premium storefront", "Ready to sell", "Secure checkout"]
+    )
 
     badge_html = ""
 
@@ -2156,6 +2387,19 @@ def public_store(request: Request, slug: str):
                 </a>
                 """
 
+            message_button = ""
+
+            if not is_owner:
+                message_button = f"""
+                <button
+                    type="button"
+                    class="button small ghost"
+                    onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`)"
+                >
+                    Message Seller
+                </button>
+                """
+
             product_html += f"""
             <div class="storefront-product-card ai-card-{card_style}">
                 <a href="/product/{item["id"]}" class="storefront-image-wrap">
@@ -2179,11 +2423,14 @@ def public_store(request: Request, slug: str):
                             View Product
                         </a>
 
+                        {message_button}
+
                         {edit_product_button}
                     </div>
                 </div>
             </div>
             """
+
     else:
         product_html = """
         <div class="empty-state">
@@ -2194,6 +2441,25 @@ def public_store(request: Request, slug: str):
 
     dashboard_link = f'<a href="/dashboard">Dashboard</a>' if is_owner else ""
     add_product_link = f'<a href="/stores/{p["slug"]}/add-product">Add Product</a>' if is_owner else ""
+
+    hero_action = ""
+
+    if is_owner:
+        hero_action = f"""
+        <a class="button" href="/stores/{p["slug"]}/add-product">
+            Add Product
+        </a>
+        """
+    else:
+        hero_action = f"""
+        <button
+            type="button"
+            class="button"
+            onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`)"
+        >
+            Message Seller
+        </button>
+        """
 
     return layout(f"""
     <div
@@ -2242,11 +2508,9 @@ def public_store(request: Request, slug: str):
                     </div>
                 </div>
 
-                {f'''
-                <a class="button" href="/stores/{p["slug"]}/add-product">
-                    Add Product
-                </a>
-                ''' if is_owner else ''}
+                <div class="storefront-hero-actions">
+                    {hero_action}
+                </div>
             </div>
         </section>
 
@@ -2266,7 +2530,6 @@ def public_store(request: Request, slug: str):
                 {product_html}
             </div>
         </section>
-
     </div>
     """, title=p["name"])
 
@@ -2335,6 +2598,7 @@ def unpublish_store(store_id: int, request: Request):
 
 @app.get("/product/{item_id}", response_class=HTMLResponse)
 def product_detail(request: Request, item_id: int):
+
     conn = db()
     cur = conn.cursor()
 
@@ -2347,6 +2611,7 @@ def product_detail(request: Request, item_id: int):
 
     if not item:
         conn.close()
+
         return layout("""
         <div class="container">
             <div class="panel">
@@ -2361,6 +2626,14 @@ def product_detail(request: Request, item_id: int):
     )
 
     store = cur.fetchone()
+
+    cur.execute(
+        "SELECT * FROM users WHERE id = ?",
+        (item["user_id"],)
+    )
+
+    seller = cur.fetchone()
+
     conn.close()
 
     try:
@@ -2390,12 +2663,20 @@ def product_detail(request: Request, item_id: int):
 
     user = require_user(request)
 
+    is_owner = bool(
+        user and user["id"] == item["user_id"]
+    )
+
     owner_buttons = ""
 
-    if user and user["id"] == item["user_id"]:
+    if is_owner:
         owner_buttons = f"""
         <div class="product-owner-actions">
-            <a href="/product/{item["id"]}/edit" class="button">
+
+            <a
+                href="/product/{item["id"]}/edit"
+                class="button"
+            >
                 Edit Product
             </a>
 
@@ -2404,10 +2685,16 @@ def product_detail(request: Request, item_id: int):
                 method="post"
                 onsubmit="return confirm('Delete this product?')"
             >
-                <button type="submit" class="delete-product-btn">
+
+                <button
+                    type="submit"
+                    class="delete-product-btn"
+                >
                     Delete Product
                 </button>
+
             </form>
+
         </div>
         """
 
@@ -2423,14 +2710,30 @@ def product_detail(request: Request, item_id: int):
         else ""
     )
 
+    message_button = ""
+
+    if not is_owner:
+        message_button = f"""
+        <button
+            type="button"
+            class="button ghost"
+            onclick="openSellerChat('{seller["id"]}', `{store["name"]}`)"
+        >
+            Message Seller
+        </button>
+        """
+
     html = f"""
     <div class="container">
+
         <a class="back" href="/s/{store["slug"]}">
             ← Back to Store
         </a>
 
         <div class="product-detail-shell">
+
             <div class="product-detail-media panel">
+
                 <img
                     id="main-product-image"
                     src="{main_image}"
@@ -2440,27 +2743,55 @@ def product_detail(request: Request, item_id: int):
                 <div class="product-detail-gallery">
                     {gallery_html}
                 </div>
+
             </div>
 
             <div class="product-detail-info panel">
-                <p class="eyebrow">Product</p>
 
-                <h1>{item["name"]}</h1>
+                <p class="eyebrow">
+                    Product
+                </p>
+
+                <h1>
+                    {item["name"]}
+                </h1>
 
                 <p class="product-detail-description">
                     {item["description"]}
                 </p>
 
                 <div class="product-detail-meta">
+
                     <div>
                         <span>Price</span>
-                        <strong>${money(item["price"])}</strong>
+                        <strong>
+                            ${money(item["price"])}
+                        </strong>
                     </div>
 
                     <div>
                         <span>Availability</span>
-                        <strong>{stock_text}</strong>
+                        <strong>
+                            {stock_text}
+                        </strong>
                     </div>
+
+                </div>
+
+                <div class="product-seller-box">
+
+                    <div>
+                        <strong>
+                            Sold by {store["name"]}
+                        </strong>
+
+                        <p class="muted">
+                            Secure checkout through LaunchFlow
+                        </p>
+                    </div>
+
+                    {message_button}
+
                 </div>
 
                 <form
@@ -2468,6 +2799,7 @@ def product_detail(request: Request, item_id: int):
                     method="post"
                     class="buy-form product-buy-box"
                 >
+
                     <label>Your email</label>
 
                     <input
@@ -2477,26 +2809,47 @@ def product_detail(request: Request, item_id: int):
                         placeholder="you@example.com"
                     >
 
+                    <label>Quantity</label>
+
+                    <input
+                        type="number"
+                        name="quantity"
+                        min="1"
+                        max="{item["stock"]}"
+                        value="1"
+                    >
+
                     <button type="submit" {buy_disabled}>
                         {"Sold Out" if item["stock"] <= 0 else "Buy Now"}
                     </button>
+
                 </form>
 
                 <div class="product-detail-note">
-                    <strong>Secure checkout</strong>
+
+                    <strong>
+                        Secure checkout
+                    </strong>
 
                     <p>
                         Payments are processed securely through LaunchFlow checkout.
                     </p>
+
                 </div>
 
                 {owner_buttons}
+
             </div>
+
         </div>
+
     </div>
     """
 
-    return layout(html, title=item["name"])
+    return layout(
+        html,
+        title=item["name"]
+    )
 
 
 @app.get("/product/{item_id}/edit", response_class=HTMLResponse)
@@ -3739,7 +4092,6 @@ def connect_stripe(request: Request):
     try:
         print("CONNECT BUTTON CLICKED")
         print("User ID:", user["id"])
-        print("Stripe key starts with:", STRIPE_SECRET_KEY[:12] if STRIPE_SECRET_KEY else "NO KEY")
 
         stripe_account_id = user["stripe_account_id"]
 
@@ -3770,10 +4122,12 @@ def connect_stripe(request: Request):
 
             conn.commit()
 
+        base_url = os.getenv("BASE_URL", "http://127.0.0.1:8000")
+
         account_link = stripe.AccountLink.create(
             account=stripe_account_id,
-            refresh_url="http://127.0.0.1:8000/stripe-connect-refresh",
-            return_url="http://127.0.0.1:8000/stripe-connect-return",
+            refresh_url=f"{base_url}/stripe-connect-refresh",
+            return_url=f"{base_url}/stripe-connect-return",
             type="account_onboarding",
         )
 
@@ -3922,22 +4276,28 @@ def discover(request: Request, q: str = ""):
         search = f"%{q.strip()}%"
 
         cur.execute("""
-        SELECT *
+        SELECT
+            products.*,
+            users.store_name as seller_name
         FROM products
-        WHERE published = 1
+        JOIN users ON products.user_id = users.id
+        WHERE products.published = 1
         AND (
-            name LIKE ?
-            OR description LIKE ?
-            OR tagline LIKE ?
+            products.name LIKE ?
+            OR products.description LIKE ?
+            OR products.tagline LIKE ?
         )
-        ORDER BY views DESC, id DESC
+        ORDER BY products.views DESC, products.id DESC
         """, (search, search, search))
     else:
         cur.execute("""
-        SELECT *
+        SELECT
+            products.*,
+            users.store_name as seller_name
         FROM products
-        WHERE published = 1
-        ORDER BY views DESC, id DESC
+        JOIN users ON products.user_id = users.id
+        WHERE products.published = 1
+        ORDER BY products.views DESC, products.id DESC
         """)
 
     stores = cur.fetchall()
@@ -3946,6 +4306,21 @@ def discover(request: Request, q: str = ""):
     cards = ""
 
     for p in stores:
+        is_owner = bool(user and user["id"] == p["user_id"])
+
+        message_button = ""
+
+        if not is_owner:
+            message_button = f"""
+            <button
+                type="button"
+                class="button small ghost"
+                onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`)"
+            >
+                Message Seller
+            </button>
+            """
+
         cards += f"""
         <div class="product-card">
             <div class="product-info">
@@ -3955,10 +4330,19 @@ def discover(request: Request, q: str = ""):
                 </div>
 
                 <h3>{p["name"]}</h3>
+
                 <p>{p["tagline"] or "No tagline yet"}</p>
 
+                <p class="muted">
+                    Seller: {p["seller_name"] or "LaunchFlow Seller"}
+                </p>
+
                 <div class="actions">
-                    <a href="/s/{p["slug"]}">View Store</a>
+                    <a href="/s/{p["slug"]}">
+                        View Store
+                    </a>
+
+                    {message_button}
                 </div>
             </div>
         </div>
@@ -3979,7 +4363,9 @@ def discover(request: Request, q: str = ""):
         <section class="hero">
             <p class="eyebrow">Marketplace</p>
             <h1>Discover stores</h1>
-            <p>Browse published stores built on LaunchFlow.</p>
+            <p>
+                Browse published stores, see who runs them, and message sellers directly.
+            </p>
 
             <form method="get" action="/discover" class="search-form">
                 <input
@@ -3999,7 +4385,8 @@ def discover(request: Request, q: str = ""):
             {cards}
         </section>
     </div>
-    """)
+    """, title="Discover")
+
 @app.get("/track", response_class=HTMLResponse)
 def track_lookup_page():
     return layout("""
