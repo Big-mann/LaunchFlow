@@ -395,9 +395,7 @@ def layout(content, title="LaunchFlow"):
     <html>
     <head>
         <title>{title}</title>
-
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
         <link rel="stylesheet" href="/static/style.css">
     </head>
 
@@ -411,205 +409,259 @@ def layout(content, title="LaunchFlow"):
             <a href="/refunds">Refunds</a>
         </footer>
 
-        <!-- FLOATING CHAT -->
-
-        <button
-            id="chat-launcher"
-            class="chat-launcher hidden"
-            type="button"
-        >
+        <button id="chat-launcher" class="chat-launcher" type="button">
             💬
-
-            <span
-                id="chat-notification-count"
-                class="chat-notification-dot hidden"
-            >
-                0
-            </span>
+            <span id="chat-notification-count" class="chat-notification-dot hidden">0</span>
         </button>
 
-        <!-- CHAT WINDOW -->
-
         <div id="chat-window" class="chat-window">
-
             <div class="chat-header">
-
                 <div>
-                    <strong id="chat-title">
-                        LaunchFlow Messages
-                    </strong>
-
-                    <p id="chat-subtitle">
-                        Seller conversation
-                    </p>
+                    <strong id="chat-title">LaunchFlow Messages</strong>
+                    <p id="chat-subtitle">Seller conversation</p>
                 </div>
 
                 <div class="chat-header-actions">
-
-                    <button
-                        type="button"
-                        onclick="expandChatWindow()"
-                    >
-                        ⛶
-                    </button>
-
-                    <button
-                        type="button"
-                        onclick="closeChatWindow()"
-                    >
-                        ✕
-                    </button>
-
+                    <button type="button" onclick="expandChatWindow()">⛶</button>
+                    <button type="button" onclick="closeChatWindow()">✕</button>
                 </div>
-
             </div>
 
             <div class="chat-main" id="chat-main">
-
                 <div class="chat-empty-state">
-
-                    <h3>
-                        Start a conversation
-                    </h3>
-
-                    <p>
-                        Message sellers directly through LaunchFlow.
-                    </p>
-
+                    <h3>Start a conversation</h3>
+                    <p>Message sellers directly through LaunchFlow.</p>
                 </div>
-
             </div>
-
         </div>
 
         <script>
-
-            // MONEY INPUTS
-
             document.querySelectorAll(".money-input").forEach(input => {{
-
                 input.addEventListener("input", () => {{
-
                     let value = input.value.replace(/[^0-9.]/g, "");
-
-                    input.value = value
-                        ? "$" + value
-                        : "";
-
+                    input.value = value ? "$" + value : "";
                 }});
-
             }});
 
-            // CHAT SYSTEM
+            const chatLauncher = document.getElementById("chat-launcher");
+            const chatWindow = document.getElementById("chat-window");
+            const chatMain = document.getElementById("chat-main");
+            const notificationDot = document.getElementById("chat-notification-count");
 
-            const chatLauncher =
-                document.getElementById("chat-launcher");
+            let unreadMessages = 0;
+            let currentConversation = null;
+            const conversations = {{}};
 
-            const chatWindow =
-                document.getElementById("chat-window");
+            function updateNotification() {{
+                if (unreadMessages > 0) {{
+                    notificationDot.classList.remove("hidden");
+                    notificationDot.textContent = unreadMessages;
+                }} else {{
+                    notificationDot.classList.add("hidden");
+                    notificationDot.textContent = "0";
+                }}
+            }}
 
-            const chatMain =
-                document.getElementById("chat-main");
+            function clearNotifications() {{
+                unreadMessages = 0;
+                updateNotification();
+            }}
 
-            function openSellerChat(
-                sellerId,
-                storeName
-            ) {{
-
-                chatLauncher.classList.remove("hidden");
-
-                chatWindow.classList.add("open");
-
-                document.getElementById("chat-title").textContent =
-                    storeName;
-
-                document.getElementById("chat-subtitle").textContent =
-                    "Seller conversation";
-
-                chatMain.innerHTML = `
-
-                    <div class="chat-active-view">
-
-                        <div class="chat-messages">
-
-                            <div class="chat-message seller">
-                                Hi! How can I help you today?
-                            </div>
-
-                        </div>
-
-                        <form
-                            class="chat-input-row"
-                            onsubmit="event.preventDefault();"
+            function renderConversationList() {{
+                let html = `
+                    <div class="chat-sidebar">
+                        <input
+                            type="text"
+                            placeholder="Search sellers..."
+                            class="chat-search"
                         >
 
-                            <input
-                                type="text"
-                                placeholder="Type a message..."
-                            >
-
-                            <button type="submit">
-                                Send
-                            </button>
-
-                        </form>
-
-                    </div>
-
+                        <div class="chat-conversation-list">
                 `;
 
+                Object.keys(conversations).forEach(key => {{
+                    const convo = conversations[key];
+                    const lastMessage = convo.messages[convo.messages.length - 1];
+
+                    html += `
+                        <button
+                            type="button"
+                            class="chat-conversation-item"
+                            onclick="openExistingConversation('${{key}}')"
+                        >
+                            <strong>${{convo.storeName}}</strong>
+                            <span>${{lastMessage.text}}</span>
+                        </button>
+                    `;
+                }});
+
+                html += `
+                        </div>
+                    </div>
+                `;
+
+                return html;
+            }}
+
+            function renderMessages(conversationKey) {{
+                const convo = conversations[conversationKey];
+
+                let messagesHtml = "";
+
+                convo.messages.forEach(message => {{
+                    messagesHtml += `
+                        <div class="chat-message ${{message.type}}">
+                            ${{message.text}}
+                        </div>
+                    `;
+                }});
+
+                chatMain.innerHTML = `
+                    <div class="chat-layout">
+                        ${{renderConversationList()}}
+
+                        <div class="chat-active-view">
+                            <div class="chat-messages" id="chat-messages">
+                                ${{messagesHtml}}
+                            </div>
+
+                            <form
+                                class="chat-input-row"
+                                id="chat-form"
+                                onsubmit="return sendChatMessage('${{conversationKey}}')"
+                            >
+                                <input
+                                    type="text"
+                                    id="chat-input"
+                                    placeholder="Type a message..."
+                                    autocomplete="off"
+                                    required
+                                >
+
+                                <button type="submit">Send</button>
+                            </form>
+                        </div>
+                    </div>
+                `;
+
+                const messages = document.getElementById("chat-messages");
+
+                if (messages) {{
+                    messages.scrollTop = messages.scrollHeight;
+                }}
+            }}
+
+            function sendChatMessage(conversationKey) {{
+                const convo = conversations[conversationKey];
+                const input = document.getElementById("chat-input");
+                const messages = document.getElementById("chat-messages");
+
+                if (!convo || !input || !messages) {{
+                    return false;
+                }}
+
+                const text = input.value.trim();
+
+                if (!text) {{
+                    return false;
+                }}
+
+                convo.messages.push({{
+                    type: "buyer",
+                    text: text
+                }});
+
+                messages.innerHTML += `
+                    <div class="chat-message buyer">
+                        ${{text}}
+                    </div>
+                `;
+
+                messages.scrollTop = messages.scrollHeight;
+                input.value = "";
+
+                setTimeout(() => {{
+                    const sellerReply = "Thanks for your message! The seller will respond soon.";
+
+                    convo.messages.push({{
+                        type: "seller",
+                        text: sellerReply
+                    }});
+
+                    messages.innerHTML += `
+                        <div class="chat-message seller">
+                            ${{sellerReply}}
+                        </div>
+                    `;
+
+                    messages.scrollTop = messages.scrollHeight;
+
+                    if (!chatWindow.classList.contains("open")) {{
+                        unreadMessages += 1;
+                        updateNotification();
+                    }}
+                }}, 1000);
+
+                return false;
+            }}
+
+            function openExistingConversation(conversationKey) {{
+                currentConversation = conversationKey;
+
+                const convo = conversations[conversationKey];
+
+                document.getElementById("chat-title").textContent = convo.storeName;
+                document.getElementById("chat-subtitle").textContent = "Seller conversation";
+
+                chatWindow.classList.add("open");
+                clearNotifications();
+                renderMessages(conversationKey);
+            }}
+
+            function openSellerChat(sellerId, storeName) {{
+                const conversationKey = sellerId + "-" + storeName;
+
+                if (!conversations[conversationKey]) {{
+                    conversations[conversationKey] = {{
+                        storeName: storeName,
+                        messages: [
+                            {{
+                                type: "seller",
+                                text: "Hi! How can I help you today?"
+                            }}
+                        ]
+                    }};
+                }}
+
+                openExistingConversation(conversationKey);
             }}
 
             chatLauncher.addEventListener("click", () => {{
-
-                if (
-                    chatWindow.classList.contains("open")
-                ) {{
-
+                if (chatWindow.classList.contains("open")) {{
                     chatWindow.classList.remove("open");
-
-                }}
-
-                else {{
-
+                }} else {{
                     chatWindow.classList.add("open");
+                    clearNotifications();
 
+                    if (currentConversation) {{
+                        renderMessages(currentConversation);
+                    }}
                 }}
-
             }});
 
             function closeChatWindow() {{
-
                 chatWindow.classList.remove("open");
-
                 chatWindow.classList.remove("expanded");
-
             }}
 
             function expandChatWindow() {{
-
-                if (
-                    chatWindow.classList.contains("expanded")
-                ) {{
-
-                    chatWindow.classList.remove("expanded");
-
-                }}
-
-                else {{
-
-                    chatWindow.classList.add("expanded");
-
-                }}
-
+                chatWindow.classList.toggle("expanded");
             }}
-
         </script>
 
     </body>
     </html>
     """
-
 
 def top_nav(user):
     if user["is_pro"] == 1:
@@ -3163,14 +3215,28 @@ def save_product_edit(
 def checkout_item(
     item_id: int,
     customer_email: str = Form(...),
-    quantity: int = Form(1)
+    customer_name: str = Form(""),
+    quantity: int = Form(1),
+    shipping_name: str = Form(""),
+    shipping_address_line1: str = Form(""),
+    shipping_address_line2: str = Form(""),
+    shipping_city: str = Form(""),
+    shipping_state: str = Form(""),
+    shipping_postal_code: str = Form(""),
+    shipping_country: str = Form("US"),
+    buyer_message: str = Form("")
 ):
+
     quantity = max(1, int(quantity))
 
     conn = db()
     cur = conn.cursor()
 
-    cur.execute("SELECT * FROM store_items WHERE id = ?", (item_id,))
+    cur.execute(
+        "SELECT * FROM store_items WHERE id = ?",
+        (item_id,)
+    )
+
     item = cur.fetchone()
 
     if not item:
@@ -3183,143 +3249,305 @@ def checkout_item(
 
     if quantity > item["stock"]:
         conn.close()
+
         return layout(f"""
         <div class="container narrow center">
+
             <div class="panel">
-                <h1>Not enough stock</h1>
-                <p>Only {item["stock"]} left in stock.</p>
-                <a class="button" href="/product/{item_id}">Back to product</a>
+
+                <h1>
+                    Not enough stock
+                </h1>
+
+                <p>
+                    Only {item["stock"]} left in stock.
+                </p>
+
+                <a class="button" href="/product/{item_id}">
+                    Back to product
+                </a>
+
             </div>
+
         </div>
         """)
 
-    cur.execute("SELECT * FROM users WHERE id = ?", (item["user_id"],))
+    cur.execute(
+        "SELECT * FROM users WHERE id = ?",
+        (item["user_id"],)
+    )
+
     seller = cur.fetchone()
 
-    if not seller or not seller["stripe_account_id"] or not seller["stripe_onboarding_complete"]:
+    if (
+        not seller
+        or not seller["stripe_account_id"]
+        or not seller["stripe_onboarding_complete"]
+    ):
         conn.close()
+
         return layout("""
         <div class="container narrow center">
+
             <div class="panel">
-                <h1>Seller payments not ready</h1>
-                <p>This seller has not finished Stripe setup yet.</p>
-                <a class="button" href="/">Back home</a>
+
+                <h1>
+                    Seller payments not ready
+                </h1>
+
+                <p>
+                    This seller has not finished Stripe setup yet.
+                </p>
+
+                <a class="button" href="/">
+                    Back home
+                </a>
+
             </div>
+
         </div>
         """)
 
     amount_cents = int(float(item["price"]) * 100)
+
     total_cents = amount_cents * quantity
+
     platform_fee = int(total_cents * 0.10)
 
     conn.close()
 
     checkout_session = stripe.checkout.Session.create(
+
         payment_method_types=["card"],
+
         mode="payment",
+
         customer_email=customer_email,
+
         line_items=[
             {
                 "price_data": {
                     "currency": "usd",
+
                     "product_data": {
                         "name": item["name"],
                         "description": item["description"],
                     },
+
                     "unit_amount": amount_cents,
                 },
+
                 "quantity": quantity,
             }
         ],
+
         payment_intent_data={
             "application_fee_amount": platform_fee,
+
             "transfer_data": {
                 "destination": seller["stripe_account_id"],
             },
         },
+
         metadata={
+
             "store_item_id": str(item["id"]),
             "store_id": str(item["store_id"]),
             "seller_id": str(item["user_id"]),
+
             "customer_email": customer_email,
+            "customer_name": customer_name,
+
             "quantity": str(quantity),
+
+            "shipping_name": shipping_name,
+            "shipping_address_line1": shipping_address_line1,
+            "shipping_address_line2": shipping_address_line2,
+            "shipping_city": shipping_city,
+            "shipping_state": shipping_state,
+            "shipping_postal_code": shipping_postal_code,
+            "shipping_country": shipping_country,
+
+            "buyer_message": buyer_message,
         },
-        success_url=f"http://127.0.0.1:8000/success-item/{item_id}?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"http://127.0.0.1:8000/product/{item_id}",
+
+        success_url=f"{BASE_URL}/success-item/{item_id}?session_id={{CHECKOUT_SESSION_ID}}",
+
+        cancel_url=f"{BASE_URL}/product/{item_id}",
     )
 
-    return RedirectResponse(checkout_session.url, status_code=303)
+    return RedirectResponse(
+        checkout_session.url,
+        status_code=303
+    )
 
 
 @app.get("/success-item/{item_id}", response_class=HTMLResponse)
 def success_item(item_id: int, session_id: str = ""):
+
     if not session_id:
-        return RedirectResponse(f"/product/{item_id}", status_code=303)
+        return RedirectResponse(
+            f"/product/{item_id}",
+            status_code=303
+        )
 
     try:
+
         session = stripe.checkout.Session.retrieve(session_id)
 
-        if session.status != "complete" or session.payment_status != "paid":
-            return RedirectResponse(f"/product/{item_id}", status_code=303)
+        if (
+            session.status != "complete"
+            or session.payment_status != "paid"
+        ):
+            return RedirectResponse(
+                f"/product/{item_id}",
+                status_code=303
+            )
 
     except Exception as e:
+
         print("Product checkout success error:", e)
-        return RedirectResponse(f"/product/{item_id}", status_code=303)
+
+        return RedirectResponse(
+            f"/product/{item_id}",
+            status_code=303
+        )
 
     conn = db()
     cur = conn.cursor()
 
-    cur.execute("SELECT * FROM store_items WHERE id = ?", (item_id,))
+    cur.execute(
+        "SELECT * FROM store_items WHERE id = ?",
+        (item_id,)
+    )
+
     item = cur.fetchone()
 
     if not item:
         conn.close()
-        return layout("<div class='container'><h1>Product not found</h1></div>")
 
-    cur.execute("SELECT * FROM orders WHERE stripe_session_id = ?", (session_id,))
+        return layout("""
+        <div class='container'>
+            <h1>Product not found</h1>
+        </div>
+        """)
+
+    cur.execute(
+        "SELECT * FROM orders WHERE stripe_session_id = ?",
+        (session_id,)
+    )
+
     existing_order = cur.fetchone()
 
     order_id = None
 
     if existing_order:
+
         order_id = existing_order["id"]
+
     else:
-        quantity = int(session.metadata.get("quantity", "1"))
+
+        quantity = int(
+            session.metadata.get("quantity", "1")
+        )
 
         if item["stock"] < quantity:
+
             conn.close()
+
             return layout("""
             <div class="container narrow center">
+
                 <div class="panel">
-                    <h1>Stock issue</h1>
-                    <p>This order was paid, but there is not enough stock left. Please contact the seller.</p>
-                    <a class="button" href="/">Back home</a>
+
+                    <h1>
+                        Stock issue
+                    </h1>
+
+                    <p>
+                        This order was paid, but there is not enough stock left.
+                    </p>
+
+                    <a class="button" href="/">
+                        Back home
+                    </a>
+
                 </div>
+
             </div>
             """)
 
-        customer_email = session.customer_details.email if session.customer_details else "customer@example.com"
+        customer_email = (
+            session.metadata.get("customer_email", "")
+        )
+
+        customer_name = (
+            session.metadata.get("customer_name", "")
+        )
+
         total_amount = float(item["price"]) * quantity
 
         cur.execute("""
         INSERT INTO orders (
+
             product_id,
             store_item_id,
             amount,
+
             customer_email,
+            customer_name,
+
+            quantity,
+
+            shipping_name,
+            shipping_address_line1,
+            shipping_address_line2,
+            shipping_city,
+            shipping_state,
+            shipping_postal_code,
+            shipping_country,
+
             stripe_session_id,
+
             payment_status,
-            shipping_status
+
+            shipping_status,
+
+            fulfillment_status,
+
+            buyer_message
+
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
+
             item["store_id"],
             item["id"],
+
             total_amount,
+
             customer_email,
+            customer_name,
+
+            quantity,
+
+            session.metadata.get("shipping_name", ""),
+            session.metadata.get("shipping_address_line1", ""),
+            session.metadata.get("shipping_address_line2", ""),
+            session.metadata.get("shipping_city", ""),
+            session.metadata.get("shipping_state", ""),
+            session.metadata.get("shipping_postal_code", ""),
+            session.metadata.get("shipping_country", ""),
+
             session_id,
+
             "paid",
-            "Not shipped yet"
+
+            "Not shipped yet",
+
+            "New order",
+
+            session.metadata.get("buyer_message", "")
         ))
 
         order_id = cur.lastrowid
@@ -3335,23 +3563,38 @@ def success_item(item_id: int, session_id: str = ""):
 
     return layout(f"""
     <div class="container narrow center">
+
         <div class="panel success-panel">
-            <h1>Payment successful 🎉</h1>
-            <p>Your order has been confirmed.</p>
-            <p class="muted">Order ID: <strong>{order_id}</strong></p>
 
-            <a class="button" href="/track-order/{order_id}">
-                Track your order
-            </a>
+            <h1>
+                Payment successful 🎉
+            </h1>
 
-            <a class="button ghost" href="/">
-                Back home
-            </a>
+            <p>
+                Your order has been confirmed.
+            </p>
+
+            <p class="muted">
+                Order ID:
+                <strong>{order_id}</strong>
+            </p>
+
+            <div class="success-actions">
+
+                <a class="button" href="/track-order/{order_id}">
+                    Track your order
+                </a>
+
+                <a class="button ghost" href="/">
+                    Back home
+                </a>
+
+            </div>
+
         </div>
+
     </div>
     """)
-
-
 
 # -----------------------------
 # EDIT / DELETE
@@ -3679,6 +3922,7 @@ def analytics(request: Request):
 
 @app.get("/orders", response_class=HTMLResponse)
 def orders(request: Request):
+
     user = require_user(request)
 
     if not user:
@@ -3688,105 +3932,338 @@ def orders(request: Request):
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT 
+
+    SELECT
         orders.*,
         products.name as store_name,
         store_items.name as item_name
+
     FROM orders
-    JOIN products ON orders.product_id = products.id
-    LEFT JOIN store_items ON orders.store_item_id = store_items.id
+
+    JOIN products
+    ON orders.product_id = products.id
+
+    LEFT JOIN store_items
+    ON orders.store_item_id = store_items.id
+
     WHERE products.user_id = ?
+
     ORDER BY orders.id DESC
+
     """, (user["id"],))
 
     orders_data = cur.fetchall()
+
     conn.close()
 
     rows = ""
 
     for o in orders_data:
+
         item_name = o["item_name"] or o["store_name"]
+
         tracking_number = o["tracking_number"] or ""
+
         shipping_carrier = o["shipping_carrier"] or ""
-        shipping_status = o["shipping_status"] or "Not shipped yet"
+
+        shipping_status = (
+            o["shipping_status"]
+            or "Not shipped yet"
+        )
+
+        fulfillment_status = (
+            o["fulfillment_status"]
+            or "New order"
+        )
+
+        buyer_message = (
+            o["buyer_message"]
+            or ""
+        )
+
+        shipping_address = f"""
+        {o["shipping_name"]}<br>
+        {o["shipping_address_line1"]}<br>
+        {o["shipping_address_line2"]}<br>
+        {o["shipping_city"]}, {o["shipping_state"]} {o["shipping_postal_code"]}<br>
+        {o["shipping_country"]}
+        """
 
         track_link = ""
+
         if tracking_number:
+
             track_link = f"""
-            <a class="button small" href="/track-order/{o["id"]}">
+            <a
+                class="button small"
+                href="/track-order/{o["id"]}"
+            >
                 Track Shipping
             </a>
             """
 
         rows += f"""
-        <div class="order-row" style="display:block;">
-            <div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-                <div>
-                    <strong>{item_name}</strong>
-                    <p class="muted">Store: {o["store_name"]}</p>
-                    <p class="muted">Customer: {o["customer_email"]}</p>
-                    <p class="muted">Ordered: {o["created_at"]}</p>
-                </div>
+        <div class="order-row advanced-order-row">
+
+            <div class="advanced-order-top">
 
                 <div>
-                    <strong>${money(o["amount"])}</strong>
-                    <p class="muted">Payment: {o["payment_status"] or "paid"}</p>
-                    <p class="muted">Shipping: {shipping_status}</p>
+
+                    <strong>
+                        {item_name}
+                    </strong>
+
+                    <p class="muted">
+                        Customer: {o["customer_email"]}
+                    </p>
+
+                    <p class="muted">
+                        Ordered: {o["created_at"]}
+                    </p>
+
                 </div>
+
+                <div class="order-price-box">
+
+                    <strong>
+                        ${money(o["amount"])}
+                    </strong>
+
+                    <p class="muted">
+                        Qty: {o["quantity"]}
+                    </p>
+
+                    <p class="muted">
+                        Payment: {o["payment_status"]}
+                    </p>
+
+                </div>
+
             </div>
 
-            <form action="/orders/{o["id"]}/shipping" method="post" style="margin-top:16px;">
-                <label>Carrier</label>
-                <input name="shipping_carrier" value="{shipping_carrier}" placeholder="USPS, UPS, FedEx">
+            <div class="order-grid">
 
-                <label>Tracking number</label>
-                <input name="tracking_number" value="{tracking_number}" placeholder="Tracking number">
+                <div class="order-box">
 
-                <label>Shipping status</label>
-                <select name="shipping_status">
-                    <option value="Not shipped yet" {"selected" if shipping_status == "Not shipped yet" else ""}>Not shipped yet</option>
-                    <option value="Processing" {"selected" if shipping_status == "Processing" else ""}>Processing</option>
-                    <option value="Shipped" {"selected" if shipping_status == "Shipped" else ""}>Shipped</option>
-                    <option value="Delivered" {"selected" if shipping_status == "Delivered" else ""}>Delivered</option>
-                </select>
+                    <h3>
+                        Shipping Address
+                    </h3>
 
-                <button type="submit">Update Shipping</button>
-                {track_link}
+                    <p>
+                        {shipping_address}
+                    </p>
+
+                </div>
+
+                <div class="order-box">
+
+                    <h3>
+                        Buyer Message
+                    </h3>
+
+                    <p>
+                        {buyer_message or "No buyer message."}
+                    </p>
+
+                </div>
+
+            </div>
+
+            <form
+                action="/orders/{o["id"]}/shipping"
+                method="post"
+                class="advanced-order-form"
+            >
+
+                <div class="form-grid">
+
+                    <div>
+
+                        <label>
+                            Carrier
+                        </label>
+
+                        <input
+                            name="shipping_carrier"
+                            value="{shipping_carrier}"
+                            placeholder="USPS, UPS, FedEx"
+                        >
+
+                    </div>
+
+                    <div>
+
+                        <label>
+                            Tracking Number
+                        </label>
+
+                        <input
+                            name="tracking_number"
+                            value="{tracking_number}"
+                            placeholder="Tracking number"
+                        >
+
+                    </div>
+
+                </div>
+
+                <div class="form-grid">
+
+                    <div>
+
+                        <label>
+                            Shipping Status
+                        </label>
+
+                        <select name="shipping_status">
+
+                            <option
+                                value="Not shipped yet"
+                                {"selected" if shipping_status == "Not shipped yet" else ""}
+                            >
+                                Not shipped yet
+                            </option>
+
+                            <option
+                                value="Processing"
+                                {"selected" if shipping_status == "Processing" else ""}
+                            >
+                                Processing
+                            </option>
+
+                            <option
+                                value="Shipped"
+                                {"selected" if shipping_status == "Shipped" else ""}
+                            >
+                                Shipped
+                            </option>
+
+                            <option
+                                value="Delivered"
+                                {"selected" if shipping_status == "Delivered" else ""}
+                            >
+                                Delivered
+                            </option>
+
+                        </select>
+
+                    </div>
+
+                    <div>
+
+                        <label>
+                            Fulfillment Status
+                        </label>
+
+                        <select name="fulfillment_status">
+
+                            <option
+                                value="New order"
+                                {"selected" if fulfillment_status == "New order" else ""}
+                            >
+                                New order
+                            </option>
+
+                            <option
+                                value="Packing"
+                                {"selected" if fulfillment_status == "Packing" else ""}
+                            >
+                                Packing
+                            </option>
+
+                            <option
+                                value="Ready to ship"
+                                {"selected" if fulfillment_status == "Ready to ship" else ""}
+                            >
+                                Ready to ship
+                            </option>
+
+                            <option
+                                value="Completed"
+                                {"selected" if fulfillment_status == "Completed" else ""}
+                            >
+                                Completed
+                            </option>
+
+                        </select>
+
+                    </div>
+
+                </div>
+
+                <div class="order-actions">
+
+                    <button type="submit">
+                        Save Order Updates
+                    </button>
+
+                    {track_link}
+
+                </div>
+
             </form>
+
         </div>
         """
 
     if not rows:
-        rows = "<p class='muted'>No orders yet.</p>"
+
+        rows = """
+        <p class='muted'>
+            No orders yet.
+        </p>
+        """
 
     return layout(f"""
     <div class="container">
+
         {top_nav(user)}
-        <a class="back" href="/dashboard">← Dashboard</a>
+
+        <a class="back" href="/dashboard">
+            ← Dashboard
+        </a>
 
         <section class="hero">
-            <p class="eyebrow">Fulfillment</p>
-            <h1>Orders</h1>
-            <p>
-                Manage customer purchases, shipping status, tracking numbers, and fulfillment.
+
+            <p class="eyebrow">
+                Fulfillment
             </p>
+
+            <h1>
+                Orders
+            </h1>
+
+            <p>
+                Manage customer purchases, shipping, fulfillment, and tracking.
+            </p>
+
         </section>
 
-        <div class="panel">
+        <div class="orders-wrapper">
             {rows}
         </div>
+
     </div>
     """, title="Orders")
 
 
 @app.post("/orders/{order_id}/shipping")
 def update_order_shipping(
+
     request: Request,
+
     order_id: int,
+
     shipping_carrier: str = Form(""),
+
     tracking_number: str = Form(""),
-    shipping_status: str = Form("Not shipped yet")
+
+    shipping_status: str = Form("Not shipped yet"),
+
+    fulfillment_status: str = Form("New order")
+
 ):
+
     user = require_user(request)
 
     if not user:
@@ -3796,64 +4273,122 @@ def update_order_shipping(
     cur = conn.cursor()
 
     cur.execute("""
+
     UPDATE orders
-    SET shipping_carrier = ?,
+
+    SET
+        shipping_carrier = ?,
         tracking_number = ?,
-        shipping_status = ?
+        shipping_status = ?,
+        fulfillment_status = ?
+
     WHERE id = ?
+
     AND product_id IN (
-        SELECT id FROM products WHERE user_id = ?
+        SELECT id
+        FROM products
+        WHERE user_id = ?
     )
+
     """, (
+
         shipping_carrier,
+
         tracking_number,
+
         shipping_status,
+
+        fulfillment_status,
+
         order_id,
+
         user["id"]
+
     ))
 
     conn.commit()
+
     conn.close()
 
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(
+        "/orders",
+        status_code=303
+    )
 
 
 @app.get("/track-order/{order_id}", response_class=HTMLResponse)
 def track_order(order_id: int):
+
     conn = db()
     cur = conn.cursor()
 
     cur.execute("""
+
     SELECT
         orders.*,
         products.name as store_name,
         store_items.name as item_name
+
     FROM orders
-    JOIN products ON orders.product_id = products.id
-    LEFT JOIN store_items ON orders.store_item_id = store_items.id
+
+    JOIN products
+    ON orders.product_id = products.id
+
+    LEFT JOIN store_items
+    ON orders.store_item_id = store_items.id
+
     WHERE orders.id = ?
+
     """, (order_id,))
 
     order = cur.fetchone()
+
     conn.close()
 
     if not order:
+
         return layout("""
         <div class="container narrow center">
+
             <div class="panel">
-                <h1>Order not found</h1>
-                <a class="button" href="/">Back home</a>
+
+                <h1>
+                    Order not found
+                </h1>
+
+                <a class="button" href="/">
+                    Back home
+                </a>
+
             </div>
+
         </div>
         """)
 
-    tracking_number = order["tracking_number"] or ""
-    shipping_carrier = order["shipping_carrier"] or "Not added yet"
-    shipping_status = order["shipping_status"] or "Not shipped yet"
+    tracking_number = (
+        order["tracking_number"]
+        or ""
+    )
+
+    shipping_carrier = (
+        order["shipping_carrier"]
+        or "Not added yet"
+    )
+
+    shipping_status = (
+        order["shipping_status"]
+        or "Not shipped yet"
+    )
+
+    fulfillment_status = (
+        order["fulfillment_status"]
+        or "New order"
+    )
 
     tracking_link = ""
 
     if tracking_number:
+
         carrier = shipping_carrier.lower()
 
         if "usps" in carrier:
@@ -3868,34 +4403,405 @@ def track_order(order_id: int):
     track_button = ""
 
     if tracking_link:
+
         track_button = f"""
-        <a class="button" href="{tracking_link}" target="_blank">
+        <a
+            class="button"
+            href="{tracking_link}"
+            target="_blank"
+        >
             Track Package
         </a>
         """
 
     return layout(f"""
     <div class="container narrow center">
-        <div class="panel">
-            <p class="eyebrow">Shipping</p>
-            <h1>Track your order</h1>
 
-            <p><strong>Item:</strong> {order["item_name"] or order["store_name"]}</p>
-            <p><strong>Status:</strong> {shipping_status}</p>
-            <p><strong>Carrier:</strong> {shipping_carrier}</p>
-            <p><strong>Tracking number:</strong> {tracking_number or "Not added yet"}</p>
+        <div class="panel track-panel">
 
-            <div style="margin-top:20px;">
+            <p class="eyebrow">
+                Shipping
+            </p>
+
+            <h1>
+                Track your order
+            </h1>
+
+            <div class="tracking-grid">
+
+                <div class="tracking-box">
+
+                    <span>Item</span>
+
+                    <strong>
+                        {order["item_name"] or order["store_name"]}
+                    </strong>
+
+                </div>
+
+                <div class="tracking-box">
+
+                    <span>Shipping Status</span>
+
+                    <strong>
+                        {shipping_status}
+                    </strong>
+
+                </div>
+
+                <div class="tracking-box">
+
+                    <span>Fulfillment</span>
+
+                    <strong>
+                        {fulfillment_status}
+                    </strong>
+
+                </div>
+
+                <div class="tracking-box">
+
+                    <span>Carrier</span>
+
+                    <strong>
+                        {shipping_carrier}
+                    </strong>
+
+                </div>
+
+            </div>
+
+            <div class="tracking-number-box">
+
+                <span>
+                    Tracking Number
+                </span>
+
+                <strong>
+                    {tracking_number or "Not added yet"}
+                </strong>
+
+            </div>
+
+            <div class="tracking-actions">
+
                 {track_button}
+
+                <a class="button ghost" href="/">
+                    Back home
+                </a>
+
             </div>
 
-            <div style="margin-top:14px;">
-                <a class="button ghost" href="/">Back home</a>
-            </div>
         </div>
+
     </div>
     """, title="Track Order")
 
+@app.post("/messages/start")
+def start_message(
+    request: Request,
+    seller_id: int = Form(...),
+    store_id: int = Form(0),
+    buyer_email: str = Form(""),
+    subject: str = Form("Store message"),
+    message: str = Form("")
+):
+    user = require_user(request)
+
+    sender_email = buyer_email.strip()
+
+    if user:
+        sender_email = user["email"]
+
+    if not sender_email:
+        return RedirectResponse("/login", status_code=303)
+
+    clean_message = message.strip() or "Hi, I have a question about your store."
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    INSERT INTO conversations (
+        buyer_email,
+        seller_id,
+        store_id,
+        order_id,
+        subject
+    )
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        sender_email,
+        seller_id,
+        store_id,
+        0,
+        subject
+    ))
+
+    conversation_id = cur.lastrowid
+
+    cur.execute("""
+    INSERT INTO messages (
+        conversation_id,
+        sender_type,
+        sender_user_id,
+        sender_email,
+        message
+    )
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        conversation_id,
+        "buyer",
+        user["id"] if user else 0,
+        sender_email,
+        clean_message
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(f"/messages/{conversation_id}", status_code=303)
+
+
+@app.get("/messages", response_class=HTMLResponse)
+def messages_inbox(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT
+        conversations.*,
+        products.name as store_name
+    FROM conversations
+    LEFT JOIN products ON conversations.store_id = products.id
+    WHERE conversations.seller_id = ?
+       OR conversations.buyer_email = ?
+    ORDER BY conversations.id DESC
+    """, (
+        user["id"],
+        user["email"]
+    ))
+
+    conversations_data = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for c in conversations_data:
+        role = "Seller" if c["seller_id"] == user["id"] else "Buyer"
+
+        rows += f"""
+        <div class="order-row">
+            <div>
+                <strong>{c["subject"] or "Conversation"}</strong>
+                <p class="muted">Store: {c["store_name"] or "Store message"}</p>
+                <p class="muted">Role: {role}</p>
+                <p class="muted">Started: {c["created_at"]}</p>
+            </div>
+
+            <a class="button small" href="/messages/{c["id"]}">
+                Open Chat
+            </a>
+        </div>
+        """
+
+    if not rows:
+        rows = """
+        <p class="muted">
+            No messages yet.
+        </p>
+        """
+
+    return layout(f"""
+    <div class="container">
+        {top_nav(user)}
+
+        <a class="back" href="/dashboard">
+            ← Dashboard
+        </a>
+
+        <section class="hero">
+            <p class="eyebrow">Inbox</p>
+            <h1>Messages</h1>
+            <p>Manage buyer and seller conversations.</p>
+        </section>
+
+        <div class="panel">
+            {rows}
+        </div>
+    </div>
+    """, title="Messages")
+
+
+@app.get("/messages/{conversation_id}", response_class=HTMLResponse)
+def message_thread(request: Request, conversation_id: int):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT
+        conversations.*,
+        products.name as store_name
+    FROM conversations
+    LEFT JOIN products ON conversations.store_id = products.id
+    WHERE conversations.id = ?
+    """, (conversation_id,))
+
+    convo = cur.fetchone()
+
+    if not convo:
+        conn.close()
+        return RedirectResponse("/messages", status_code=303)
+
+    allowed = (
+        convo["seller_id"] == user["id"]
+        or convo["buyer_email"] == user["email"]
+    )
+
+    if not allowed:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute("""
+    SELECT *
+    FROM messages
+    WHERE conversation_id = ?
+    ORDER BY id ASC
+    """, (conversation_id,))
+
+    message_rows = cur.fetchall()
+    conn.close()
+
+    messages_html = ""
+
+    for m in message_rows:
+        bubble_class = "buyer"
+
+        if m["sender_type"] == "seller":
+            bubble_class = "seller"
+
+        messages_html += f"""
+        <div class="chat-message {bubble_class}">
+            <p>{m["message"]}</p>
+            <span>{m["created_at"]}</span>
+        </div>
+        """
+
+    if not messages_html:
+        messages_html = """
+        <p class="muted">No messages yet.</p>
+        """
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+
+        <a class="back" href="/messages">
+            ← Messages
+        </a>
+
+        <div class="panel">
+            <p class="eyebrow">Conversation</p>
+            <h1>{convo["subject"] or "Chat"}</h1>
+            <p class="muted">Store: {convo["store_name"] or "Store message"}</p>
+
+            <div class="full-chat-box">
+                {messages_html}
+            </div>
+
+            <form action="/messages/{conversation_id}/send" method="post" class="chat-input-row full-chat-input">
+                <input
+                    name="message"
+                    required
+                    placeholder="Type your message..."
+                >
+
+                <button type="submit">
+                    Send
+                </button>
+            </form>
+        </div>
+    </div>
+    """, title="Chat")
+
+
+@app.post("/messages/{conversation_id}/send")
+def send_message(
+    request: Request,
+    conversation_id: int,
+    message: str = Form(...)
+):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    clean_message = message.strip()
+
+    if not clean_message:
+        return RedirectResponse(f"/messages/{conversation_id}", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT *
+    FROM conversations
+    WHERE id = ?
+    """, (conversation_id,))
+
+    convo = cur.fetchone()
+
+    if not convo:
+        conn.close()
+        return RedirectResponse("/messages", status_code=303)
+
+    allowed = (
+        convo["seller_id"] == user["id"]
+        or convo["buyer_email"] == user["email"]
+    )
+
+    if not allowed:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    sender_type = "buyer"
+
+    if convo["seller_id"] == user["id"]:
+        sender_type = "seller"
+
+    cur.execute("""
+    INSERT INTO messages (
+        conversation_id,
+        sender_type,
+        sender_user_id,
+        sender_email,
+        message
+    )
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        conversation_id,
+        sender_type,
+        user["id"],
+        user["email"],
+        clean_message
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(f"/messages/{conversation_id}", status_code=303)
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings(request: Request):
