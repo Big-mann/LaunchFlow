@@ -255,12 +255,330 @@ def init_db():
     add_column_if_missing(cur, "orders", "fulfillment_status", "TEXT DEFAULT 'New order'")
     add_column_if_missing(cur, "orders", "buyer_message", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "orders", "seller_notes", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "messages", "read_at", "TEXT DEFAULT ''")
 
     conn.commit()
     conn.close()
 
 
 init_db()
+
+@app.get("/chat/inbox")
+def chat_inbox(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return {"ok": False, "unread": 0, "conversations": []}
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT
+        conversations.id,
+        conversations.buyer_email,
+        conversations.seller_id,
+        conversations.store_id,
+        conversations.created_at,
+        products.name AS store_name,
+        users.store_name AS seller_name,
+
+        (
+            SELECT message
+            FROM messages
+            WHERE messages.conversation_id = conversations.id
+            ORDER BY messages.id DESC
+            LIMIT 1
+        ) AS last_message,
+
+        (
+            SELECT created_at
+            FROM messages
+            WHERE messages.conversation_id = conversations.id
+            ORDER BY messages.id DESC
+            LIMIT 1
+        ) AS last_message_time,
+
+        (
+            SELECT COUNT(*)
+            FROM messages
+            WHERE messages.conversation_id = conversations.id
+            AND messages.sender_user_id != ?
+            AND COALESCE(messages.read_at, '') = ''
+        ) AS unread_count
+
+    FROM conversations
+    JOIN products ON conversations.store_id = products.id
+    JOIN users ON conversations.seller_id = users.id
+    WHERE conversations.seller_id = ?
+       OR conversations.buyer_email = ?
+    ORDER BY COALESCE(last_message_time, conversations.created_at) DESC
+    """, (user["id"], user["id"], user["email"]))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    conversations_data = []
+    total_unread = 0
+
+    for row in rows:
+        unread_count = row["unread_count"] or 0
+        total_unread += unread_count
+
+        other_name = row["store_name"]
+
+        conversations_data.append({
+            "id": row["id"],
+            "store_id": row["store_id"],
+            "store_name": row["store_name"],
+            "seller_name": row["seller_name"],
+            "seller_id": row["seller_id"],
+            "buyer_email": row["buyer_email"],
+            "title": other_name,
+            "last_message": row["last_message"] or "No messages yet",
+            "last_message_time": row["last_message_time"] or row["created_at"],
+            "unread_count": unread_count
+        })
+
+    return {
+        "ok": True,
+        "unread": total_unread,
+        "conversations": conversations_data
+    }
+
+
+@app.post("/chat/start")
+async def chat_start(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return {"ok": False, "error": "Not logged in"}
+
+    data = await request.json()
+
+    seller_id = int(data.get("seller_id", 0))
+    store_id = int(data.get("store_id", 0))
+
+    if seller_id <= 0 or store_id <= 0:
+        return {"ok": False, "error": "Missing seller or store"}
+
+    if seller_id == user["id"]:
+        return {"ok": False, "error": "You cannot message yourself"}
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT *
+    FROM products
+    WHERE id = ?
+    AND user_id = ?
+    """, (store_id, seller_id))
+
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return {"ok": False, "error": "Store not found"}
+
+    cur.execute("""
+    SELECT *
+    FROM conversations
+    WHERE buyer_email = ?
+    AND seller_id = ?
+    AND store_id = ?
+    """, (user["email"], seller_id, store_id))
+
+    convo = cur.fetchone()
+
+    if convo:
+        conversation_id = convo["id"]
+    else:
+        cur.execute("""
+        INSERT INTO conversations (
+            buyer_email,
+            seller_id,
+            store_id,
+            subject
+        )
+        VALUES (?, ?, ?, ?)
+        """, (
+            user["email"],
+            seller_id,
+            store_id,
+            store["name"]
+        ))
+
+        conn.commit()
+        conversation_id = cur.lastrowid
+
+    conn.close()
+
+    return {
+        "ok": True,
+        "conversation_id": conversation_id
+    }
+
+
+@app.get("/chat/messages/{conversation_id}")
+def chat_messages(request: Request, conversation_id: int):
+    user = require_user(request)
+
+    if not user:
+        return {"ok": False, "messages": []}
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT *
+    FROM conversations
+    WHERE id = ?
+    AND (
+        seller_id = ?
+        OR buyer_email = ?
+    )
+    """, (conversation_id, user["id"], user["email"]))
+
+    convo = cur.fetchone()
+
+    if not convo:
+        conn.close()
+        return {"ok": False, "messages": []}
+
+    cur.execute("""
+    UPDATE messages
+    SET read_at = CURRENT_TIMESTAMP
+    WHERE conversation_id = ?
+    AND sender_user_id != ?
+    AND COALESCE(read_at, '') = ''
+    """, (conversation_id, user["id"]))
+
+    cur.execute("""
+    SELECT *
+    FROM messages
+    WHERE conversation_id = ?
+    ORDER BY id ASC
+    """, (conversation_id,))
+
+    rows = cur.fetchall()
+
+    conn.commit()
+    conn.close()
+
+    messages_data = []
+
+    for row in rows:
+        messages_data.append({
+            "id": row["id"],
+            "conversation_id": row["conversation_id"],
+            "sender_type": row["sender_type"],
+            "sender_user_id": row["sender_user_id"],
+            "sender_email": row["sender_email"],
+            "message": row["message"],
+            "created_at": row["created_at"],
+            "read_at": row["read_at"] if "read_at" in row.keys() else "",
+            "mine": row["sender_user_id"] == user["id"]
+        })
+
+    return {
+        "ok": True,
+        "conversation_id": conversation_id,
+        "messages": messages_data
+    }
+
+
+@app.post("/chat/send")
+async def chat_send(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return {"ok": False, "error": "Not logged in"}
+
+    data = await request.json()
+
+    conversation_id = int(data.get("conversation_id", 0))
+    message = str(data.get("message", "")).strip()
+
+    if conversation_id <= 0:
+        return {"ok": False, "error": "Missing conversation"}
+
+    if not message:
+        return {"ok": False, "error": "Empty message"}
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT *
+    FROM conversations
+    WHERE id = ?
+    AND (
+        seller_id = ?
+        OR buyer_email = ?
+    )
+    """, (conversation_id, user["id"], user["email"]))
+
+    convo = cur.fetchone()
+
+    if not convo:
+        conn.close()
+        return {"ok": False, "error": "Conversation not found"}
+
+    sender_type = "seller" if user["id"] == convo["seller_id"] else "buyer"
+
+    cur.execute("""
+    INSERT INTO messages (
+        conversation_id,
+        sender_type,
+        sender_user_id,
+        sender_email,
+        message
+    )
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        conversation_id,
+        sender_type,
+        user["id"],
+        user["email"],
+        message
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {"ok": True}
+
+
+@app.get("/chat/unread-count")
+def chat_unread_count(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return {"ok": False, "unread": 0}
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT COUNT(*) AS count
+    FROM messages
+    JOIN conversations ON messages.conversation_id = conversations.id
+    WHERE (
+        conversations.seller_id = ?
+        OR conversations.buyer_email = ?
+    )
+    AND messages.sender_user_id != ?
+    AND COALESCE(messages.read_at, '') = ''
+    """, (user["id"], user["email"], user["id"]))
+
+    count = cur.fetchone()["count"]
+    conn.close()
+
+    return {
+        "ok": True,
+        "unread": count or 0
+    }
 
 
 # -----------------------------
@@ -400,7 +718,6 @@ def layout(content, title="LaunchFlow"):
     </head>
 
     <body>
-
         {content}
 
         <footer class="site-footer">
@@ -420,7 +737,6 @@ def layout(content, title="LaunchFlow"):
                     <strong id="chat-title">LaunchFlow Messages</strong>
                     <p id="chat-subtitle">Inbox</p>
                 </div>
-
                 <div class="chat-header-actions">
                     <button type="button" onclick="expandChatWindow()">⛶</button>
                     <button type="button" onclick="closeChatWindow()">✕</button>
@@ -436,6 +752,14 @@ def layout(content, title="LaunchFlow"):
         </div>
 
         <script>
+            const chatLauncher = document.getElementById("chat-launcher");
+            const chatWindow = document.getElementById("chat-window");
+            const chatMain = document.getElementById("chat-main");
+            const notificationDot = document.getElementById("chat-notification-count");
+
+            let currentConversationId = null;
+            let currentInbox = [];
+
             document.querySelectorAll(".money-input").forEach(input => {{
                 input.addEventListener("input", () => {{
                     let value = input.value.replace(/[^0-9.]/g, "");
@@ -443,105 +767,53 @@ def layout(content, title="LaunchFlow"):
                 }});
             }});
 
-            const chatLauncher = document.getElementById("chat-launcher");
-            const chatWindow = document.getElementById("chat-window");
-            const chatMain = document.getElementById("chat-main");
-            const notificationDot = document.getElementById("chat-notification-count");
+            async function refreshUnreadCount() {{
+                const res = await fetch("/chat/unread-count");
+                const data = await res.json();
 
-            let currentConversation = null;
-
-            let conversations = JSON.parse(
-                localStorage.getItem("launchflow_conversations") || "{{}}"
-            );
-
-            function saveConversations() {{
-                localStorage.setItem(
-                    "launchflow_conversations",
-                    JSON.stringify(conversations)
-                );
-            }}
-
-            function getUnreadCount() {{
-                let total = 0;
-
-                Object.keys(conversations).forEach(key => {{
-                    total += conversations[key].unread || 0;
-                }});
-
-                return total;
-            }}
-
-            function updateNotification() {{
-                const unread = getUnreadCount();
-
-                if (unread > 0) {{
+                if (data.ok && data.unread > 0) {{
                     notificationDot.classList.remove("hidden");
-                    notificationDot.textContent = unread;
+                    notificationDot.textContent = data.unread;
                 }} else {{
                     notificationDot.classList.add("hidden");
                     notificationDot.textContent = "0";
                 }}
             }}
 
-            function markConversationSeen(conversationKey) {{
-                if (!conversations[conversationKey]) {{
+            async function renderInbox(searchTerm = "") {{
+                currentConversationId = null;
+
+                document.getElementById("chat-title").textContent = "LaunchFlow Messages";
+                document.getElementById("chat-subtitle").textContent = "Inbox";
+
+                const res = await fetch("/chat/inbox");
+                const data = await res.json();
+
+                if (!data.ok) {{
+                    chatMain.innerHTML = `
+                        <div class="chat-empty-state">
+                            <h3>Please log in</h3>
+                            <p>You need an account to use messages.</p>
+                        </div>
+                    `;
                     return;
                 }}
 
-                conversations[conversationKey].unread = 0;
+                currentInbox = data.conversations || [];
 
-                saveConversations();
-                updateNotification();
-            }}
+                let filtered = currentInbox.filter(c => {{
+                    const term = searchTerm.toLowerCase();
+                    return (
+                        String(c.store_name || "").toLowerCase().includes(term) ||
+                        String(c.seller_name || "").toLowerCase().includes(term) ||
+                        String(c.buyer_email || "").toLowerCase().includes(term)
+                    );
+                }});
 
-            function formatPreview(message) {{
-                if (!message) {{
-                    return "";
-                }}
+                let buttons = "";
 
-                if (message.type === "buyer") {{
-                    return "You: " + message.text;
-                }}
-
-                return message.text;
-            }}
-
-            function handleConversationSearch(event) {{
-                const value = event.target.value;
-
-                renderInbox(value);
-
-                setTimeout(() => {{
-                    const input = document.getElementById("chat-search");
-
-                    if (input) {{
-                        input.focus();
-                        input.value = value;
-                        input.setSelectionRange(value.length, value.length);
-                    }}
-                }}, 0);
-            }}
-
-            function renderConversationButtons(searchTerm = "") {{
-                let html = "";
-
-                const term = searchTerm.toLowerCase();
-
-                const keys = Object.keys(conversations)
-                    .filter(key => {{
-                        const convo = conversations[key];
-
-                        return (
-                            convo.storeName.toLowerCase().includes(term) ||
-                            key.toLowerCase().includes(term)
-                        );
-                    }})
-                    .sort((a, b) => {{
-                        return (conversations[b].updatedAt || 0) - (conversations[a].updatedAt || 0);
-                    }});
-
-                if (keys.length === 0) {{
-                    return `
+                if (filtered.length === 0) {{
+                    buttons = `
                         <div class="chat-empty-state">
                             <h3>No conversations yet</h3>
                             <p>Open a store and press Message Seller to start one.</p>
@@ -549,35 +821,21 @@ def layout(content, title="LaunchFlow"):
                     `;
                 }}
 
-                keys.forEach(key => {{
-                    const convo = conversations[key];
-                    const lastMessage = convo.messages[convo.messages.length - 1];
-                    const unreadClass = convo.unread > 0 ? "unread" : "";
-                    const unreadBadge = convo.unread > 0 ? `<span class="chat-mini-badge">${{convo.unread}}</span>` : "";
+                filtered.forEach(c => {{
+                    const unreadClass = c.unread_count > 0 ? "unread" : "";
+                    const badge = c.unread_count > 0 ? `<span class="chat-mini-badge">${{c.unread_count}}</span>` : "";
 
-                    html += `
+                    buttons += `
                         <button
                             type="button"
                             class="chat-conversation-item ${{unreadClass}}"
-                            onclick="openExistingConversation('${{key}}')"
+                            onclick="openExistingConversation(${{c.id}})"
                         >
-                            <strong>${{convo.storeName}} ${{unreadBadge}}</strong>
-                            <span>${{formatPreview(lastMessage)}}</span>
+                            <strong>${{c.store_name}} ${{badge}}</strong>
+                            <span>${{c.last_message || "No messages yet"}}</span>
                         </button>
                     `;
                 }});
-
-                return html;
-            }}
-
-            function renderInbox(searchTerm = "") {{
-                currentConversation = null;
-
-                document.getElementById("chat-title").textContent =
-                    "LaunchFlow Messages";
-
-                document.getElementById("chat-subtitle").textContent =
-                    "Inbox";
 
                 chatMain.innerHTML = `
                     <div class="chat-layout">
@@ -588,11 +846,10 @@ def layout(content, title="LaunchFlow"):
                                 class="chat-search"
                                 id="chat-search"
                                 value="${{searchTerm}}"
-                                oninput="handleConversationSearch(event)"
                             >
 
                             <div class="chat-conversation-list">
-                                ${{renderConversationButtons(searchTerm)}}
+                                ${{buttons}}
                             </div>
                         </div>
 
@@ -604,22 +861,47 @@ def layout(content, title="LaunchFlow"):
                         </div>
                     </div>
                 `;
+
+                const searchInput = document.getElementById("chat-search");
+                searchInput.addEventListener("input", function() {{
+                    renderInbox(this.value);
+                }});
+
+                setTimeout(() => {{
+                    const input = document.getElementById("chat-search");
+                    if (input) {{
+                        input.focus();
+                        input.setSelectionRange(input.value.length, input.value.length);
+                    }}
+                }}, 0);
+
+                refreshUnreadCount();
             }}
 
-            function renderMessages(conversationKey) {{
-                const convo = conversations[conversationKey];
+            async function openExistingConversation(conversationId) {{
+                currentConversationId = conversationId;
 
-                if (!convo) {{
+                const convo = currentInbox.find(c => c.id === conversationId);
+
+                if (convo) {{
+                    document.getElementById("chat-title").textContent = convo.store_name;
+                    document.getElementById("chat-subtitle").textContent = "Conversation";
+                }}
+
+                const res = await fetch(`/chat/messages/${{conversationId}}`);
+                const data = await res.json();
+
+                if (!data.ok) {{
                     renderInbox();
                     return;
                 }}
 
                 let messagesHtml = "";
 
-                convo.messages.forEach(message => {{
+                data.messages.forEach(m => {{
                     messagesHtml += `
-                        <div class="chat-message ${{message.type}}">
-                            ${{message.text}}
+                        <div class="chat-message ${{m.mine ? "buyer" : "seller"}}">
+                            ${{m.message}}
                         </div>
                     `;
                 }});
@@ -627,17 +909,10 @@ def layout(content, title="LaunchFlow"):
                 chatMain.innerHTML = `
                     <div class="chat-layout">
                         <div class="chat-sidebar">
-                            <input
-                                type="text"
-                                placeholder="Search conversations..."
-                                class="chat-search"
-                                id="chat-search"
-                                oninput="handleConversationSearch(event)"
-                            >
-
-                            <div class="chat-conversation-list">
-                                ${{renderConversationButtons()}}
-                            </div>
+                            <button type="button" class="chat-conversation-item" onclick="renderInbox()">
+                                <strong>← Back to inbox</strong>
+                                <span>View all message history</span>
+                            </button>
                         </div>
 
                         <div class="chat-active-view">
@@ -645,11 +920,7 @@ def layout(content, title="LaunchFlow"):
                                 ${{messagesHtml}}
                             </div>
 
-                            <form
-                                class="chat-input-row"
-                                id="chat-form"
-                                onsubmit="return sendChatMessage('${{conversationKey}}')"
-                            >
+                            <form class="chat-input-row" onsubmit="return sendChatMessage(event)">
                                 <input
                                     type="text"
                                     id="chat-input"
@@ -657,7 +928,6 @@ def layout(content, title="LaunchFlow"):
                                     autocomplete="off"
                                     required
                                 >
-
                                 <button type="submit">Send</button>
                             </form>
                         </div>
@@ -665,115 +935,59 @@ def layout(content, title="LaunchFlow"):
                 `;
 
                 const messages = document.getElementById("chat-messages");
+                messages.scrollTop = messages.scrollHeight;
 
-                if (messages) {{
-                    messages.scrollTop = messages.scrollHeight;
-                }}
+                refreshUnreadCount();
             }}
 
-            function sendChatMessage(conversationKey) {{
-                const convo = conversations[conversationKey];
+            async function sendChatMessage(event) {{
+                event.preventDefault();
+
                 const input = document.getElementById("chat-input");
-                const messages = document.getElementById("chat-messages");
-
-                if (!convo || !input || !messages) {{
-                    return false;
-                }}
-
                 const text = input.value.trim();
 
-                if (!text) {{
+                if (!text || !currentConversationId) {{
                     return false;
                 }}
 
-                convo.messages.push({{
-                    type: "buyer",
-                    text: text
+                await fetch("/chat/send", {{
+                    method: "POST",
+                    headers: {{
+                        "Content-Type": "application/json"
+                    }},
+                    body: JSON.stringify({{
+                        conversation_id: currentConversationId,
+                        message: text
+                    }})
                 }});
 
-                convo.updatedAt = Date.now();
-
-                messages.innerHTML += `
-                    <div class="chat-message buyer">
-                        ${{text}}
-                    </div>
-                `;
-
-                messages.scrollTop = messages.scrollHeight;
                 input.value = "";
-
-                if (!convo.autoReplySent) {{
-                    convo.autoReplySent = true;
-
-                    setTimeout(() => {{
-                        const sellerReply =
-                            "Got it — the seller received your message.";
-
-                        convo.messages.push({{
-                            type: "seller",
-                            text: sellerReply
-                        }});
-
-                        convo.unread = (convo.unread || 0) + 1;
-                        convo.updatedAt = Date.now();
-
-                        saveConversations();
-
-                        messages.innerHTML += `
-                            <div class="chat-message seller">
-                                ${{sellerReply}}
-                            </div>
-                        `;
-
-                        messages.scrollTop = messages.scrollHeight;
-
-                        if (!chatWindow.classList.contains("open")) {{
-                            updateNotification();
-                        }}
-                    }}, 1000);
-                }}
-
-                saveConversations();
+                openExistingConversation(currentConversationId);
                 return false;
             }}
 
-            function openExistingConversation(conversationKey) {{
-                currentConversation = conversationKey;
+            async function openSellerChat(sellerId, storeName, storeId) {{
+                const res = await fetch("/chat/start", {{
+                    method: "POST",
+                    headers: {{
+                        "Content-Type": "application/json"
+                    }},
+                    body: JSON.stringify({{
+                        seller_id: sellerId,
+                        store_id: storeId
+                    }})
+                }});
 
-                const convo = conversations[conversationKey];
+                const data = await res.json();
 
-                document.getElementById("chat-title").textContent =
-                    convo.storeName;
-
-                document.getElementById("chat-subtitle").textContent =
-                    "Conversation";
-
-                chatWindow.classList.add("open");
-
-                markConversationSeen(conversationKey);
-                renderMessages(conversationKey);
-            }}
-
-            function openSellerChat(sellerId, storeName) {{
-                const conversationKey = sellerId + "-" + storeName;
-
-                if (!conversations[conversationKey]) {{
-                    conversations[conversationKey] = {{
-                        storeName: storeName,
-                        unread: 0,
-                        autoReplySent: false,
-                        updatedAt: Date.now(),
-                        messages: [
-                            {{
-                                type: "seller",
-                                text: "Hi! How can I help you today?"
-                            }}
-                        ]
-                    }};
+                if (!data.ok) {{
+                    alert(data.error || "Could not start chat.");
+                    return;
                 }}
 
-                saveConversations();
-                openExistingConversation(conversationKey);
+                chatWindow.classList.add("open");
+                await renderInbox();
+                openExistingConversation(data.conversation_id);
             }}
 
             chatLauncher.addEventListener("click", () => {{
@@ -782,7 +996,6 @@ def layout(content, title="LaunchFlow"):
                 }} else {{
                     chatWindow.classList.add("open");
                     renderInbox();
-                    updateNotification();
                 }}
             }});
 
@@ -795,9 +1008,9 @@ def layout(content, title="LaunchFlow"):
                 chatWindow.classList.toggle("expanded");
             }}
 
-            updateNotification();
+            refreshUnreadCount();
+            setInterval(refreshUnreadCount, 8000);
         </script>
-
     </body>
     </html>
     """
@@ -2586,7 +2799,7 @@ def public_store(request: Request, slug: str):
                 <button
                     type="button"
                     class="button small ghost"
-                    onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`)"
+                    onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`, '{p["id"]}')"
                 >
                     Message Seller
                 </button>
@@ -2647,7 +2860,7 @@ def public_store(request: Request, slug: str):
         <button
             type="button"
             class="button"
-            onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`)"
+            onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`, '{p["id"]}')"
         >
             Message Seller
         </button>
@@ -5332,9 +5545,11 @@ def discover(request: Request, q: str = ""):
             products.name LIKE ?
             OR products.description LIKE ?
             OR products.tagline LIKE ?
+            OR users.store_name LIKE ?
+            OR users.email LIKE ?
         )
         ORDER BY products.views DESC, products.id DESC
-        """, (search, search, search))
+        """, (search, search, search, search, search))
     else:
         cur.execute("""
         SELECT
@@ -5361,7 +5576,7 @@ def discover(request: Request, q: str = ""):
             <button
                 type="button"
                 class="button small ghost"
-                onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`)"
+                onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`, '{p["id"]}')"
             >
                 Message Seller
             </button>
@@ -5418,7 +5633,7 @@ def discover(request: Request, q: str = ""):
                     type="text"
                     name="q"
                     value="{q}"
-                    placeholder="Search stores..."
+                    placeholder="Search stores, sellers, or creators..."
                 >
 
                 <button type="submit">
@@ -5432,6 +5647,7 @@ def discover(request: Request, q: str = ""):
         </section>
     </div>
     """, title="Discover")
+
 
 @app.get("/track", response_class=HTMLResponse)
 def track_lookup_page():
