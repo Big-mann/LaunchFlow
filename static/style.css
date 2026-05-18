@@ -3748,7 +3748,7 @@ select option {
 .chat-window {
     position: fixed !important;
     right: 24px !important;
-    bottom: 24px !important;
+    bottom: 96px !important;
     width: 380px !important;
     height: 560px !important;
     background: #071225 !important;
@@ -3773,8 +3773,16 @@ select option {
 
 .chat-layout {
     height: 100% !important;
+    min-height: 0 !important;
     display: flex !important;
     overflow: hidden !important;
+}
+
+.chat-sidebar {
+    width: 150px !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    border-right: 1px solid rgba(255,255,255,0.08) !important;
 }
 
 .chat-active-view {
@@ -3814,7 +3822,6 @@ select option {
         #7c3aed,
         #2563eb
     ) !important;
-
     color: white !important;
     align-self: flex-end !important;
 }
@@ -3825,6 +3832,8 @@ select option {
     gap: 10px !important;
     padding: 16px !important;
     border-top: 1px solid rgba(255,255,255,0.06) !important;
+    flex-shrink: 0 !important;
+    background: #071225 !important;
 }
 
 .chat-input-row input {
@@ -3845,13 +3854,11 @@ select option {
     border: none !important;
     cursor: pointer !important;
     z-index: 999999 !important;
-
     background: linear-gradient(
         135deg,
         #7c3aed,
         #2563eb
     ) !important;
-
     color: white !important;
     font-size: 24px !important;
 }
@@ -3860,19 +3867,14 @@ select option {
     position: absolute !important;
     top: -5px !important;
     right: -5px !important;
-
     width: 22px !important;
     height: 22px !important;
-
     border-radius: 50% !important;
-
     background: #ef4444 !important;
     color: white !important;
-
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-
     font-size: 11px !important;
     font-weight: 700 !important;
 }
@@ -3880,6 +3882,7 @@ select option {
 .hidden {
     display: none !important;
 }
+
 .chat-conversation-item.unread {
     background: rgba(124, 58, 237, 0.22) !important;
     border: 1px solid rgba(124, 58, 237, 0.45) !important;
@@ -3899,10 +3902,38 @@ select option {
     margin-left: 6px !important;
 }
 
-.chat-seen {
-    align-self: flex-end !important;
-    font-size: 12px !important;
-    color: rgba(255,255,255,0.55) !important;
-    margin-top: -6px !important;
-    margin-right: 8px !important;
+@media (max-width: 768px) {
+    .chat-window {
+        width: 100% !important;
+        height: 100dvh !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        border-radius: 0 !important;
+        max-height: 100dvh !important;
+    }
+
+    .chat-layout {
+        flex-direction: column !important;
+    }
+
+    .chat-sidebar {
+        width: 100% !important;
+        max-height: 220px !important;
+        border-right: none !important;
+        border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+    }
+
+    .chat-active-view {
+        flex: 1 !important;
+        min-height: 0 !important;
+    }
+
+    .chat-messages {
+        padding-bottom: 120px !important;
+    }
+
+    .chat-input-row {
+        position: sticky !important;
+        bottom: 0 !important;
+    }
 }

@@ -325,8 +325,6 @@ def chat_inbox(request: Request):
         unread_count = row["unread_count"] or 0
         total_unread += unread_count
 
-        other_name = row["store_name"]
-
         conversations_data.append({
             "id": row["id"],
             "store_id": row["store_id"],
@@ -334,7 +332,7 @@ def chat_inbox(request: Request):
             "seller_name": row["seller_name"],
             "seller_id": row["seller_id"],
             "buyer_email": row["buyer_email"],
-            "title": other_name,
+            "title": row["store_name"],
             "last_message": row["last_message"] or "No messages yet",
             "last_message_time": row["last_message_time"] or row["created_at"],
             "unread_count": unread_count
@@ -454,6 +452,8 @@ def chat_messages(request: Request, conversation_id: int):
     AND COALESCE(read_at, '') = ''
     """, (conversation_id, user["id"]))
 
+    conn.commit()
+
     cur.execute("""
     SELECT *
     FROM messages
@@ -462,13 +462,14 @@ def chat_messages(request: Request, conversation_id: int):
     """, (conversation_id,))
 
     rows = cur.fetchall()
-
-    conn.commit()
     conn.close()
 
     messages_data = []
 
     for row in rows:
+        mine = row["sender_user_id"] == user["id"]
+        read_at = row["read_at"] if "read_at" in row.keys() else ""
+
         messages_data.append({
             "id": row["id"],
             "conversation_id": row["conversation_id"],
@@ -477,8 +478,9 @@ def chat_messages(request: Request, conversation_id: int):
             "sender_email": row["sender_email"],
             "message": row["message"],
             "created_at": row["created_at"],
-            "read_at": row["read_at"] if "read_at" in row.keys() else "",
-            "mine": row["sender_user_id"] == user["id"]
+            "read_at": read_at,
+            "mine": mine,
+            "seen": bool(mine and read_at)
         })
 
     return {
@@ -547,7 +549,16 @@ async def chat_send(request: Request):
     conn.commit()
     conn.close()
 
-    return {"ok": True}
+    return {
+        "ok": True,
+        "message": {
+            "conversation_id": conversation_id,
+            "sender_type": sender_type,
+            "sender_user_id": user["id"],
+            "sender_email": user["email"],
+            "message": message
+        }
+    }
 
 
 @app.get("/chat/unread-count")
@@ -759,6 +770,7 @@ def layout(content, title="LaunchFlow"):
 
             let currentConversationId = null;
             let currentInbox = [];
+            let chatSearchTimer = null;
 
             document.querySelectorAll(".money-input").forEach(input => {{
                 input.addEventListener("input", () => {{
@@ -863,17 +875,16 @@ def layout(content, title="LaunchFlow"):
                 `;
 
                 const searchInput = document.getElementById("chat-search");
-                searchInput.addEventListener("input", function() {{
-                    renderInbox(this.value);
-                }});
 
-                setTimeout(() => {{
-                    const input = document.getElementById("chat-search");
-                    if (input) {{
-                        input.focus();
-                        input.setSelectionRange(input.value.length, input.value.length);
-                    }}
-                }}, 0);
+                searchInput.addEventListener("input", function() {{
+                    clearTimeout(chatSearchTimer);
+
+                    const value = this.value;
+
+                    chatSearchTimer = setTimeout(() => {{
+                        renderInbox(value);
+                    }}, 150);
+                }});
 
                 refreshUnreadCount();
             }}
@@ -944,13 +955,24 @@ def layout(content, title="LaunchFlow"):
                 event.preventDefault();
 
                 const input = document.getElementById("chat-input");
+                const messages = document.getElementById("chat-messages");
                 const text = input.value.trim();
 
-                if (!text || !currentConversationId) {{
+                if (!text || !currentConversationId || !messages) {{
                     return false;
                 }}
 
-                await fetch("/chat/send", {{
+                input.value = "";
+
+                messages.innerHTML += `
+                    <div class="chat-message buyer">
+                        ${{text}}
+                    </div>
+                `;
+
+                messages.scrollTop = messages.scrollHeight;
+
+                const res = await fetch("/chat/send", {{
                     method: "POST",
                     headers: {{
                         "Content-Type": "application/json"
@@ -961,8 +983,20 @@ def layout(content, title="LaunchFlow"):
                     }})
                 }});
 
-                input.value = "";
-                openExistingConversation(currentConversationId);
+                const data = await res.json();
+
+                if (!data.ok) {{
+                    messages.innerHTML += `
+                        <div class="chat-message seller">
+                            Message failed to send.
+                        </div>
+                    `;
+
+                    messages.scrollTop = messages.scrollHeight;
+                }}
+
+                refreshUnreadCount();
+
                 return false;
             }}
 
@@ -986,8 +1020,10 @@ def layout(content, title="LaunchFlow"):
                 }}
 
                 chatWindow.classList.add("open");
+
                 await renderInbox();
-                openExistingConversation(data.conversation_id);
+
+                await openExistingConversation(data.conversation_id);
             }}
 
             chatLauncher.addEventListener("click", () => {{
@@ -1009,7 +1045,10 @@ def layout(content, title="LaunchFlow"):
             }}
 
             refreshUnreadCount();
-            setInterval(refreshUnreadCount, 8000);
+
+            setInterval(async () => {{
+                await refreshUnreadCount();
+            }}, 3000);
         </script>
     </body>
     </html>
@@ -5921,3 +5960,41 @@ def refund_page():
 
     </div>
     """, title="Refund Policy")
+@app.get("/upgrade", response_class=HTMLResponse)
+def upgrade_page(request: Request, reason: str = ""):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    reason_text = ""
+
+    if reason == "store_limit":
+        reason_text = "You reached the free store limit. Upgrade to create more stores."
+    elif reason == "ai_limit":
+        reason_text = "You used your free AI generation. Upgrade for more AI-powered stores."
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+
+        <section class="hero center">
+            <p class="eyebrow">Upgrade</p>
+            <h1>Upgrade to Premium</h1>
+            <p>{reason_text or "Unlock more stores, AI generation, premium templates, and advanced tools."}</p>
+
+            <div class="panel" style="margin-top:24px;">
+                <h2>Premium Plan</h2>
+                <p class="muted">More stores, more AI features, and more control.</p>
+
+                <form action="/create-checkout-session" method="post">
+                    <button type="submit">Upgrade with Stripe</button>
+                </form>
+
+                <div style="margin-top:14px;">
+                    <a class="button ghost" href="/dashboard">Back to Dashboard</a>
+                </div>
+            </div>
+        </section>
+    </div>
+    """, title="Upgrade")
