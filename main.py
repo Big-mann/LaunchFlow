@@ -418,7 +418,7 @@ def layout(content, title="LaunchFlow"):
             <div class="chat-header">
                 <div>
                     <strong id="chat-title">LaunchFlow Messages</strong>
-                    <p id="chat-subtitle">Seller conversation</p>
+                    <p id="chat-subtitle">Inbox</p>
                 </div>
 
                 <div class="chat-header-actions">
@@ -429,7 +429,7 @@ def layout(content, title="LaunchFlow"):
 
             <div class="chat-main" id="chat-main">
                 <div class="chat-empty-state">
-                    <h3>Start a conversation</h3>
+                    <h3>Your messages</h3>
                     <p>Message sellers directly through LaunchFlow.</p>
                 </div>
             </div>
@@ -448,63 +448,132 @@ def layout(content, title="LaunchFlow"):
             const chatMain = document.getElementById("chat-main");
             const notificationDot = document.getElementById("chat-notification-count");
 
-            let unreadMessages = 0;
             let currentConversation = null;
-            const conversations = {{}};
+
+            let conversations = JSON.parse(
+                localStorage.getItem("launchflow_conversations") || "{{}}"
+            );
+
+            function saveConversations() {{
+                localStorage.setItem(
+                    "launchflow_conversations",
+                    JSON.stringify(conversations)
+                );
+            }}
+
+            function getUnreadCount() {{
+                let total = 0;
+
+                Object.keys(conversations).forEach(key => {{
+                    total += conversations[key].unread || 0;
+                }});
+
+                return total;
+            }}
 
             function updateNotification() {{
-                if (unreadMessages > 0) {{
+                const unread = getUnreadCount();
+
+                if (unread > 0) {{
                     notificationDot.classList.remove("hidden");
-                    notificationDot.textContent = unreadMessages;
+                    notificationDot.textContent = unread;
                 }} else {{
                     notificationDot.classList.add("hidden");
                     notificationDot.textContent = "0";
                 }}
             }}
 
-            function clearNotifications() {{
-                unreadMessages = 0;
+            function markConversationSeen(conversationKey) {{
+                if (!conversations[conversationKey]) {{
+                    return;
+                }}
+
+                conversations[conversationKey].unread = 0;
+                conversations[conversationKey].seen = true;
+                saveConversations();
                 updateNotification();
             }}
 
-            function renderConversationList() {{
+            function renderInbox(searchTerm = "") {{
                 let html = `
-                    <div class="chat-sidebar">
-                        <input
-                            type="text"
-                            placeholder="Search sellers..."
-                            class="chat-search"
-                        >
+                    <div class="chat-layout">
+                        <div class="chat-sidebar">
+                            <input
+                                type="text"
+                                placeholder="Search conversations..."
+                                class="chat-search"
+                                id="chat-search"
+                                value="${{searchTerm}}"
+                                oninput="renderInbox(this.value)"
+                            >
 
-                        <div class="chat-conversation-list">
+                            <div class="chat-conversation-list">
                 `;
 
-                Object.keys(conversations).forEach(key => {{
+                const keys = Object.keys(conversations)
+                    .filter(key => {{
+                        const convo = conversations[key];
+                        const term = searchTerm.toLowerCase();
+
+                        return (
+                            convo.storeName.toLowerCase().includes(term) ||
+                            key.toLowerCase().includes(term)
+                        );
+                    }})
+                    .sort((a, b) => {{
+                        return (conversations[b].updatedAt || 0) - (conversations[a].updatedAt || 0);
+                    }});
+
+                if (keys.length === 0) {{
+                    html += `
+                        <div class="chat-empty-state">
+                            <h3>No conversations yet</h3>
+                            <p>Open a store and press Message Seller to start one.</p>
+                        </div>
+                    `;
+                }}
+
+                keys.forEach(key => {{
                     const convo = conversations[key];
                     const lastMessage = convo.messages[convo.messages.length - 1];
+                    const unreadClass = convo.unread > 0 ? "unread" : "";
+                    const unreadBadge = convo.unread > 0 ? `<span class="chat-mini-badge">${{convo.unread}}</span>` : "";
 
                     html += `
                         <button
                             type="button"
-                            class="chat-conversation-item"
+                            class="chat-conversation-item ${{unreadClass}}"
                             onclick="openExistingConversation('${{key}}')"
                         >
-                            <strong>${{convo.storeName}}</strong>
+                            <strong>${{convo.storeName}} ${{unreadBadge}}</strong>
                             <span>${{lastMessage.text}}</span>
                         </button>
                     `;
                 }});
 
                 html += `
+                            </div>
+                        </div>
+
+                        <div class="chat-active-view">
+                            <div class="chat-empty-state">
+                                <h3>Select a conversation</h3>
+                                <p>Your message history will appear here.</p>
+                            </div>
                         </div>
                     </div>
                 `;
 
-                return html;
+                chatMain.innerHTML = html;
             }}
 
             function renderMessages(conversationKey) {{
                 const convo = conversations[conversationKey];
+
+                if (!convo) {{
+                    renderInbox();
+                    return;
+                }}
 
                 let messagesHtml = "";
 
@@ -516,13 +585,30 @@ def layout(content, title="LaunchFlow"):
                     `;
                 }});
 
+                const seenText =
+                    convo.seen && convo.messages.length && convo.messages[convo.messages.length - 1].type === "buyer"
+                        ? `<div class="chat-seen">Seen</div>`
+                        : "";
+
                 chatMain.innerHTML = `
                     <div class="chat-layout">
-                        ${{renderConversationList()}}
+                        <div class="chat-sidebar">
+                            <input
+                                type="text"
+                                placeholder="Search conversations..."
+                                class="chat-search"
+                                oninput="renderInbox(this.value)"
+                            >
+
+                            <div class="chat-conversation-list">
+                                ${{renderConversationButtons()}}
+                            </div>
+                        </div>
 
                         <div class="chat-active-view">
                             <div class="chat-messages" id="chat-messages">
                                 ${{messagesHtml}}
+                                ${{seenText}}
                             </div>
 
                             <form
@@ -551,6 +637,34 @@ def layout(content, title="LaunchFlow"):
                 }}
             }}
 
+            function renderConversationButtons() {{
+                let html = "";
+
+                Object.keys(conversations)
+                    .sort((a, b) => {{
+                        return (conversations[b].updatedAt || 0) - (conversations[a].updatedAt || 0);
+                    }})
+                    .forEach(key => {{
+                        const convo = conversations[key];
+                        const lastMessage = convo.messages[convo.messages.length - 1];
+                        const unreadClass = convo.unread > 0 ? "unread" : "";
+                        const unreadBadge = convo.unread > 0 ? `<span class="chat-mini-badge">${{convo.unread}}</span>` : "";
+
+                        html += `
+                            <button
+                                type="button"
+                                class="chat-conversation-item ${{unreadClass}}"
+                                onclick="openExistingConversation('${{key}}')"
+                            >
+                                <strong>${{convo.storeName}} ${{unreadBadge}}</strong>
+                                <span>${{lastMessage.text}}</span>
+                            </button>
+                        `;
+                    }});
+
+                return html;
+            }}
+
             function sendChatMessage(conversationKey) {{
                 const convo = conversations[conversationKey];
                 const input = document.getElementById("chat-input");
@@ -571,6 +685,9 @@ def layout(content, title="LaunchFlow"):
                     text: text
                 }});
 
+                convo.updatedAt = Date.now();
+                convo.seen = false;
+
                 messages.innerHTML += `
                     <div class="chat-message buyer">
                         ${{text}}
@@ -580,28 +697,39 @@ def layout(content, title="LaunchFlow"):
                 messages.scrollTop = messages.scrollHeight;
                 input.value = "";
 
-                setTimeout(() => {{
-                    const sellerReply = "Thanks for your message! The seller will respond soon.";
+                if (!convo.autoReplySent) {{
+                    convo.autoReplySent = true;
 
-                    convo.messages.push({{
-                        type: "seller",
-                        text: sellerReply
-                    }});
+                    setTimeout(() => {{
+                        const sellerReply =
+                            "Thanks for your message! The seller will respond soon.";
 
-                    messages.innerHTML += `
-                        <div class="chat-message seller">
-                            ${{sellerReply}}
-                        </div>
-                    `;
+                        convo.messages.push({{
+                            type: "seller",
+                            text: sellerReply
+                        }});
 
-                    messages.scrollTop = messages.scrollHeight;
+                        convo.unread = (convo.unread || 0) + 1;
+                        convo.updatedAt = Date.now();
+                        convo.seen = false;
 
-                    if (!chatWindow.classList.contains("open")) {{
-                        unreadMessages += 1;
-                        updateNotification();
-                    }}
-                }}, 1000);
+                        saveConversations();
 
+                        messages.innerHTML += `
+                            <div class="chat-message seller">
+                                ${{sellerReply}}
+                            </div>
+                        `;
+
+                        messages.scrollTop = messages.scrollHeight;
+
+                        if (!chatWindow.classList.contains("open")) {{
+                            updateNotification();
+                        }}
+                    }}, 1000);
+                }}
+
+                saveConversations();
                 return false;
             }}
 
@@ -611,10 +739,11 @@ def layout(content, title="LaunchFlow"):
                 const convo = conversations[conversationKey];
 
                 document.getElementById("chat-title").textContent = convo.storeName;
-                document.getElementById("chat-subtitle").textContent = "Seller conversation";
+                document.getElementById("chat-subtitle").textContent = "Conversation";
 
                 chatWindow.classList.add("open");
-                clearNotifications();
+
+                markConversationSeen(conversationKey);
                 renderMessages(conversationKey);
             }}
 
@@ -624,6 +753,10 @@ def layout(content, title="LaunchFlow"):
                 if (!conversations[conversationKey]) {{
                     conversations[conversationKey] = {{
                         storeName: storeName,
+                        unread: 0,
+                        seen: true,
+                        autoReplySent: false,
+                        updatedAt: Date.now(),
                         messages: [
                             {{
                                 type: "seller",
@@ -633,6 +766,7 @@ def layout(content, title="LaunchFlow"):
                     }};
                 }}
 
+                saveConversations();
                 openExistingConversation(conversationKey);
             }}
 
@@ -641,13 +775,23 @@ def layout(content, title="LaunchFlow"):
                     chatWindow.classList.remove("open");
                 }} else {{
                     chatWindow.classList.add("open");
-                    clearNotifications();
+                    clearCurrentNotifications();
 
-                    if (currentConversation) {{
+                    if (currentConversation && conversations[currentConversation]) {{
                         renderMessages(currentConversation);
+                    }} else {{
+                        renderInbox();
                     }}
                 }}
             }});
+
+            function clearCurrentNotifications() {{
+                if (currentConversation && conversations[currentConversation]) {{
+                    markConversationSeen(currentConversation);
+                }} else {{
+                    updateNotification();
+                }}
+            }}
 
             function closeChatWindow() {{
                 chatWindow.classList.remove("open");
@@ -657,11 +801,14 @@ def layout(content, title="LaunchFlow"):
             function expandChatWindow() {{
                 chatWindow.classList.toggle("expanded");
             }}
+
+            updateNotification();
         </script>
 
     </body>
     </html>
     """
+
 
 def top_nav(user):
     if user["is_pro"] == 1:

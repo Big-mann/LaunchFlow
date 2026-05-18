@@ -3880,3 +3880,29 @@ select option {
 .hidden {
     display: none !important;
 }
+.chat-conversation-item.unread {
+    background: rgba(124, 58, 237, 0.22) !important;
+    border: 1px solid rgba(124, 58, 237, 0.45) !important;
+}
+
+.chat-mini-badge {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-width: 18px !important;
+    height: 18px !important;
+    padding: 0 6px !important;
+    border-radius: 999px !important;
+    background: #ef4444 !important;
+    color: white !important;
+    font-size: 11px !important;
+    margin-left: 6px !important;
+}
+
+.chat-seen {
+    align-self: flex-end !important;
+    font-size: 12px !important;
+    color: rgba(255,255,255,0.55) !important;
+    margin-top: -6px !important;
+    margin-right: 8px !important;
+}
