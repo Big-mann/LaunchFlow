@@ -1048,6 +1048,13 @@ def layout(content, title="LaunchFlow"):
 
             setInterval(async () => {{
                 await refreshUnreadCount();
+
+                if (
+                    chatWindow.classList.contains("open") &&
+                    !currentConversationId
+                ) {{
+                    await renderInbox();
+                }}
             }}, 5000);
         </script>
     </body>
