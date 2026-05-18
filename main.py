@@ -1048,17 +1048,7 @@ def layout(content, title="LaunchFlow"):
 
             setInterval(async () => {{
                 await refreshUnreadCount();
-
-                if (chatWindow.classList.contains("open")) {{
-                    const activeConversationId = currentConversationId;
-
-                    await renderInbox();
-
-                    if (activeConversationId) {{
-                        await openExistingConversation(activeConversationId);
-                    }}
-                }}
-            }}, 3000);
+            }}, 5000);
         </script>
     </body>
     </html>
@@ -2694,6 +2684,44 @@ def save_store_product(
 
     return RedirectResponse(f"/s/{slug}#products", status_code=303)
 
+@app.get("/upgrade", response_class=HTMLResponse)
+def upgrade_page(request: Request, reason: str = ""):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    reason_text = ""
+
+    if reason == "store_limit":
+        reason_text = "You reached the free store limit. Upgrade to create more stores."
+    elif reason == "ai_limit":
+        reason_text = "You used your free AI generation. Upgrade for more AI-powered stores."
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+
+        <section class="hero center">
+            <p class="eyebrow">Upgrade</p>
+            <h1>Upgrade to Premium</h1>
+            <p>{reason_text or "Unlock more stores, AI generation, premium templates, and advanced tools."}</p>
+
+            <div class="panel" style="margin-top:24px;">
+                <h2>Premium Plan</h2>
+                <p class="muted">More stores, more AI features, and more control.</p>
+
+                <form action="/create-checkout-session" method="post">
+                    <button type="submit">Upgrade with Stripe</button>
+                </form>
+
+                <div style="margin-top:14px;">
+                    <a class="button ghost" href="/dashboard">Back to Dashboard</a>
+                </div>
+            </div>
+        </section>
+    </div>
+    """, title="Upgrade")
 
 # -----------------------------
 # PUBLIC STORE
@@ -5970,41 +5998,4 @@ def refund_page():
 
     </div>
     """, title="Refund Policy")
-@app.get("/upgrade", response_class=HTMLResponse)
-def upgrade_page(request: Request, reason: str = ""):
-    user = require_user(request)
 
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    reason_text = ""
-
-    if reason == "store_limit":
-        reason_text = "You reached the free store limit. Upgrade to create more stores."
-    elif reason == "ai_limit":
-        reason_text = "You used your free AI generation. Upgrade for more AI-powered stores."
-
-    return layout(f"""
-    <div class="container narrow">
-        {top_nav(user)}
-
-        <section class="hero center">
-            <p class="eyebrow">Upgrade</p>
-            <h1>Upgrade to Premium</h1>
-            <p>{reason_text or "Unlock more stores, AI generation, premium templates, and advanced tools."}</p>
-
-            <div class="panel" style="margin-top:24px;">
-                <h2>Premium Plan</h2>
-                <p class="muted">More stores, more AI features, and more control.</p>
-
-                <form action="/create-checkout-session" method="post">
-                    <button type="submit">Upgrade with Stripe</button>
-                </form>
-
-                <div style="margin-top:14px;">
-                    <a class="button ghost" href="/dashboard">Back to Dashboard</a>
-                </div>
-            </div>
-        </section>
-    </div>
-    """, title="Upgrade")
