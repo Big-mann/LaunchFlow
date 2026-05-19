@@ -2728,7 +2728,7 @@ def upgrade_page(request: Request, reason: str = ""):
                 <p class="muted">More stores, more AI features, and more control.</p>
 
                 <form action="/create-checkout-session" method="post">
-                    <button type="submit">Upgrade with Stripe</button>
+                    <button type="submit">Upgrade</button>
                 </form>
 
                 <div style="margin-top:14px;">
