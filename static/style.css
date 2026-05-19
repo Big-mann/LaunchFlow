@@ -3960,3 +3960,17 @@ select option {
         display: block !important;
     }
 }
+.single-chat-layout {
+    display: flex !important;
+    height: 100% !important;
+}
+
+.single-chat-layout .chat-active-view {
+    width: 100% !important;
+    flex: 1 !important;
+}
+
+.chat-back-button {
+    margin: 14px !important;
+    flex-shrink: 0 !important;
+}

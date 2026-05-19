@@ -918,15 +918,13 @@ def layout(content, title="LaunchFlow"):
                 }});
 
                 chatMain.innerHTML = `
-                    <div class="chat-layout">
-                        <div class="chat-sidebar">
-                            <button type="button" class="chat-conversation-item" onclick="renderInbox()">
+                    <div class="chat-layout single-chat-layout">
+                        <div class="chat-active-view">
+                            <button type="button" class="chat-conversation-item chat-back-button" onclick="renderInbox()">
                                 <strong>← Back to inbox</strong>
                                 <span>View all message history</span>
                             </button>
-                        </div>
 
-                        <div class="chat-active-view">
                             <div class="chat-messages" id="chat-messages">
                                 ${{messagesHtml}}
                             </div>
