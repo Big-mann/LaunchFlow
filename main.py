@@ -1049,11 +1049,19 @@ def layout(content, title="LaunchFlow"):
 
                 if (
                     chatWindow.classList.contains("open") &&
+                    currentConversationId &&
+                    document.activeElement?.id !== "chat-input"
+                ) {{
+                    await openExistingConversation(currentConversationId);
+                }}
+
+                if (
+                    chatWindow.classList.contains("open") &&
                     !currentConversationId
                 ) {{
                     await renderInbox();
                 }}
-            }}, 5000);
+            }}, 3000);
         </script>
     </body>
     </html>
