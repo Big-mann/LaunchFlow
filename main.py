@@ -5381,13 +5381,23 @@ def connect_stripe(request: Request):
             account = stripe.Account.retrieve(stripe_account_id)
         else:
             account = stripe.Account.create(
-                type="express",
                 country="US",
                 email=user["email"],
                 capabilities={
                     "card_payments": {"requested": True},
                     "transfers": {"requested": True},
                 },
+                controller={
+                    "fees": {
+                        "payer": "application"
+                    },
+                    "losses": {
+                        "payments": "application"
+                    },
+                    "stripe_dashboard": {
+                        "type": "express"
+                    }
+                }
             )
 
             stripe_account_id = account.id
@@ -5441,7 +5451,6 @@ def stripe_connect_refresh(request: Request):
 
 @app.get("/stripe-connect-return")
 def stripe_connect_return(request: Request):
-
     user = require_user(request)
 
     if not user:
@@ -5508,7 +5517,6 @@ def stripe_connect_return(request: Request):
             f"/settings?stripe_debug=error:{str(e)}",
             status_code=303
         )
-
 
 
 @app.get("/track", response_class=HTMLResponse)
