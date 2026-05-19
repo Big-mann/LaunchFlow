@@ -5519,6 +5519,32 @@ def stripe_connect_return(request: Request):
         )
 
 
+@app.get("/reset-stripe-connect")
+def reset_stripe_connect(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        UPDATE users
+        SET stripe_account_id = '',
+            stripe_onboarding_complete = 0
+        WHERE id = ?
+        """,
+        (user["id"],)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse("/settings", status_code=303)
+
+
 @app.get("/track", response_class=HTMLResponse)
 def track_lookup_page():
     return layout("""
