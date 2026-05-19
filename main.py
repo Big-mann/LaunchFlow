@@ -5419,7 +5419,19 @@ def connect_stripe(request: Request):
     except Exception as e:
         print("Stripe Connect error:", e)
         conn.close()
-        return RedirectResponse("/settings", status_code=303)
+
+        return layout(f"""
+        <div class="container narrow center">
+            <div class="panel">
+                <h1>Stripe Connect Error</h1>
+                <p>{str(e)}</p>
+
+                <a class="button" href="/settings">
+                    Back to Settings
+                </a>
+            </div>
+        </div>
+        """)
 
 
 @app.get("/stripe-connect-refresh")
@@ -5439,7 +5451,6 @@ def stripe_connect_return(request: Request):
     cur = conn.cursor()
 
     try:
-
         cur.execute(
             "SELECT stripe_account_id FROM users WHERE id = ?",
             (user["id"],)
@@ -5449,7 +5460,10 @@ def stripe_connect_return(request: Request):
 
         if not row or not row["stripe_account_id"]:
             conn.close()
-            return RedirectResponse("/settings", status_code=303)
+            return RedirectResponse(
+                "/settings?stripe_debug=no_stripe_account_id",
+                status_code=303
+            )
 
         stripe_account_id = row["stripe_account_id"]
 
@@ -5471,221 +5485,30 @@ def stripe_connect_return(request: Request):
         )
 
         conn.commit()
+        conn.close()
 
         print("CONNECTED:", onboarding_complete)
         print("ACCOUNT:", stripe_account_id)
+        print("DETAILS:", account.details_submitted)
+        print("CHARGES:", account.charges_enabled)
+        print("PAYOUTS:", account.payouts_enabled)
+
+        return RedirectResponse(
+            f"/settings?stripe_debug=details:{account.details_submitted}-charges:{account.charges_enabled}-payouts:{account.payouts_enabled}",
+            status_code=303
+        )
 
     except Exception as e:
-
         print("STRIPE CONNECT RETURN ERROR")
         print(str(e))
 
-    conn.close()
+        conn.close()
 
-    return RedirectResponse("/settings", status_code=303)
-
-
-@app.get("/manage-subscription", response_class=HTMLResponse)
-def manage_subscription(request: Request):
-    user = require_user(request)
-
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    if not user["is_pro"]:
-        return RedirectResponse("/upgrade", status_code=303)
-
-    return layout(f"""
-    <div class="container narrow center">
-        {top_nav(user)}
-
-        <div class="panel upgrade-panel">
-            <p class="eyebrow">Subscription</p>
-
-            <h1>Premium Active</h1>
-
-            <p>
-                Manage your Premium subscription through Stripe.
-            </p>
-
-            <div class="price">$20<span>/month</span></div>
-
-            <br>
-
-            <form action="/stripe-billing-portal" method="post">
-                <button type="submit">
-                    Manage or Cancel Subscription
-                </button>
-            </form>
-
-            <br>
-
-            <a class="subtle-link" href="/dashboard">
-                Back to Dashboard
-            </a>
-        </div>
-    </div>
-    """)
-
-
-@app.post("/stripe-billing-portal")
-def stripe_billing_portal(request: Request):
-    user = require_user(request)
-
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    try:
-        customers = stripe.Customer.list(
-            email=user["email"],
-            limit=1
+        return RedirectResponse(
+            f"/settings?stripe_debug=error:{str(e)}",
+            status_code=303
         )
 
-        if not customers.data:
-            return RedirectResponse("/upgrade", status_code=303)
-
-        customer = customers.data[0]
-
-        base_url = os.getenv("BASE_URL", "http://127.0.0.1:8000")
-
-        portal_session = stripe.billing_portal.Session.create(
-            customer=customer.id,
-            return_url=f"{base_url}/dashboard"
-        )
-
-        return RedirectResponse(portal_session.url, status_code=303)
-
-    except Exception as e:
-        print("Stripe billing portal error:", e)
-        return RedirectResponse("/dashboard", status_code=303)
-
-
-@app.get("/discover", response_class=HTMLResponse)
-def discover(request: Request, q: str = ""):
-    user = require_user(request)
-
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    conn = db()
-    cur = conn.cursor()
-
-    if q.strip():
-        search = f"%{q.strip()}%"
-
-        cur.execute("""
-        SELECT
-            products.*,
-            users.store_name as seller_name
-        FROM products
-        JOIN users ON products.user_id = users.id
-        WHERE products.published = 1
-        AND (
-            products.name LIKE ?
-            OR products.description LIKE ?
-            OR products.tagline LIKE ?
-            OR users.store_name LIKE ?
-            OR users.email LIKE ?
-        )
-        ORDER BY products.views DESC, products.id DESC
-        """, (search, search, search, search, search))
-    else:
-        cur.execute("""
-        SELECT
-            products.*,
-            users.store_name as seller_name
-        FROM products
-        JOIN users ON products.user_id = users.id
-        WHERE products.published = 1
-        ORDER BY products.views DESC, products.id DESC
-        """)
-
-    stores = cur.fetchall()
-    conn.close()
-
-    cards = ""
-
-    for p in stores:
-        is_owner = bool(user and user["id"] == p["user_id"])
-
-        message_button = ""
-
-        if not is_owner:
-            message_button = f"""
-            <button
-                type="button"
-                class="button small ghost"
-                onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`, '{p["id"]}')"
-            >
-                Message Seller
-            </button>
-            """
-
-        cards += f"""
-        <div class="product-card">
-            <div class="product-info">
-                <div class="card-top">
-                    <span class="tag">{p["theme"]}</span>
-                    <span>{p["views"] or 0} views</span>
-                </div>
-
-                <h3>{p["name"]}</h3>
-
-                <p>{p["tagline"] or "No tagline yet"}</p>
-
-                <p class="muted">
-                    Seller: {p["seller_name"] or "LaunchFlow Seller"}
-                </p>
-
-                <div class="actions">
-                    <a href="/s/{p["slug"]}">
-                        View Store
-                    </a>
-
-                    {message_button}
-                </div>
-            </div>
-        </div>
-        """
-
-    if not cards:
-        cards = """
-        <div class="empty">
-            <h2>No stores found</h2>
-            <p>Try another search.</p>
-        </div>
-        """
-
-    return layout(f"""
-    <div class="container">
-        {top_nav(user)}
-
-        <section class="hero">
-            <p class="eyebrow">Marketplace</p>
-            <h1>Discover stores</h1>
-            <p>
-                Browse published stores, see who runs them, and message sellers directly.
-            </p>
-
-            <form method="get" action="/discover" class="search-form">
-                <input
-                    type="text"
-                    name="q"
-                    value="{q}"
-                    placeholder="Search stores, sellers, or creators..."
-                >
-
-                <button type="submit">
-                    Search
-                </button>
-            </form>
-        </section>
-
-        <section class="grid">
-            {cards}
-        </section>
-    </div>
-    """, title="Discover")
 
 
 @app.get("/track", response_class=HTMLResponse)
