@@ -3974,3 +3974,15 @@ select option {
     margin: 14px !important;
     flex-shrink: 0 !important;
 }
+.discover-tabs {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+.discover-tabs .active {
+    background: rgba(255,255,255,0.18) !important;
+    border-color: rgba(255,255,255,0.28) !important;
+}

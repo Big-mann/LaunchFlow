@@ -1994,7 +1994,264 @@ def create_store(
 
     return RedirectResponse(f"/s/{final_slug}", status_code=303)
 
+@app.get("/discover", response_class=HTMLResponse)
+def discover(request: Request, q: str = "", type: str = "all"):
+    user = require_user(request)
 
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    q_clean = q.strip()
+    search = f"%{q_clean}%"
+
+    conn = db()
+    cur = conn.cursor()
+
+    if q_clean:
+        cur.execute("""
+        SELECT
+            store_items.*,
+            products.name AS store_name,
+            products.slug AS store_slug,
+            products.theme AS store_theme,
+            users.store_name AS seller_name
+        FROM store_items
+        JOIN products ON store_items.store_id = products.id
+        JOIN users ON store_items.user_id = users.id
+        WHERE products.published = 1
+        AND (
+            store_items.name LIKE ?
+            OR store_items.description LIKE ?
+            OR products.name LIKE ?
+            OR users.store_name LIKE ?
+        )
+        ORDER BY store_items.created_at DESC
+        """, (search, search, search, search))
+    else:
+        cur.execute("""
+        SELECT
+            store_items.*,
+            products.name AS store_name,
+            products.slug AS store_slug,
+            products.theme AS store_theme,
+            users.store_name AS seller_name
+        FROM store_items
+        JOIN products ON store_items.store_id = products.id
+        JOIN users ON store_items.user_id = users.id
+        WHERE products.published = 1
+        ORDER BY store_items.created_at DESC
+        LIMIT 24
+        """)
+
+    product_results = cur.fetchall()
+
+    if q_clean:
+        cur.execute("""
+        SELECT
+            products.*,
+            users.store_name AS seller_name,
+            COALESCE(SUM(orders.quantity), 0) AS total_sold
+        FROM products
+        JOIN users ON products.user_id = users.id
+        LEFT JOIN orders ON orders.product_id = products.id
+        WHERE products.published = 1
+        AND (
+            products.name LIKE ?
+            OR products.description LIKE ?
+            OR products.tagline LIKE ?
+            OR users.store_name LIKE ?
+        )
+        GROUP BY products.id
+        ORDER BY total_sold DESC, products.views DESC, products.id DESC
+        """, (search, search, search, search))
+    else:
+        cur.execute("""
+        SELECT
+            products.*,
+            users.store_name AS seller_name,
+            COALESCE(SUM(orders.quantity), 0) AS total_sold
+        FROM products
+        JOIN users ON products.user_id = users.id
+        LEFT JOIN orders ON orders.product_id = products.id
+        WHERE products.published = 1
+        GROUP BY products.id
+        ORDER BY total_sold DESC, products.views DESC, products.id DESC
+        LIMIT 18
+        """)
+
+    store_results = cur.fetchall()
+    conn.close()
+
+    product_cards = ""
+
+    for item in product_results:
+        product_cards += f"""
+        <div class="product-card">
+            <div class="product-info">
+                <div class="card-top">
+                    <span class="tag">{item["stock"]} in stock</span>
+                    <span>${money(item["price"])}</span>
+                </div>
+
+                <h3>{item["name"]}</h3>
+
+                <p>{item["description"] or "No description yet."}</p>
+
+                <p class="muted">
+                    Store: {item["store_name"] or "LaunchFlow Store"}
+                </p>
+
+                <div class="actions">
+                    <a href="/product/{item["id"]}">
+                        View Product
+                    </a>
+
+                    <a class="button small ghost" href="/s/{item["store_slug"]}">
+                        View Store
+                    </a>
+                </div>
+            </div>
+        </div>
+        """
+
+    store_cards = ""
+
+    for p in store_results:
+        is_owner = bool(user and user["id"] == p["user_id"])
+
+        message_button = ""
+
+        if not is_owner:
+            message_button = f"""
+            <button
+                type="button"
+                class="button small ghost"
+                onclick="openSellerChat('{p["user_id"]}', `{p["name"]}`, '{p["id"]}')"
+            >
+                Message Seller
+            </button>
+            """
+
+        store_cards += f"""
+        <div class="product-card">
+            <div class="product-info">
+                <div class="card-top">
+                    <span class="tag">{p["theme"]}</span>
+                    <span>{p["total_sold"] or 0} sold</span>
+                </div>
+
+                <h3>{p["name"]}</h3>
+
+                <p>{p["tagline"] or "No tagline yet."}</p>
+
+                <p class="muted">
+                    Seller: {p["seller_name"] or "LaunchFlow Seller"}
+                </p>
+
+                <div class="actions">
+                    <a href="/s/{p["slug"]}">
+                        View Store
+                    </a>
+
+                    {message_button}
+                </div>
+            </div>
+        </div>
+        """
+
+    if not product_cards:
+        product_cards = """
+        <div class="empty">
+            <h2>No products found</h2>
+            <p>Try searching for something else.</p>
+        </div>
+        """
+
+    if not store_cards:
+        store_cards = """
+        <div class="empty">
+            <h2>No stores found</h2>
+            <p>Try searching for another store or seller.</p>
+        </div>
+        """
+
+    products_active = "active" if type == "products" else ""
+    stores_active = "active" if type == "stores" else ""
+    all_active = "active" if type == "all" else ""
+
+    show_products = type in ["all", "products"]
+    show_stores = type in ["all", "stores"]
+
+    return layout(f"""
+    <div class="container">
+        {top_nav(user)}
+
+        <section class="hero">
+            <p class="eyebrow">Marketplace</p>
+            <h1>Discover products and stores</h1>
+            <p>
+                Search products, explore sellers, and find top-performing stores on LaunchFlow.
+            </p>
+
+            <form method="get" action="/discover" class="search-form">
+                <input
+                    type="text"
+                    name="q"
+                    value="{q_clean}"
+                    placeholder="Search products, stores, or sellers..."
+                >
+
+                <button type="submit">
+                    Search
+                </button>
+            </form>
+
+            <div class="discover-tabs">
+                <a class="button ghost {all_active}" href="/discover?q={q_clean}&type=all">
+                    All
+                </a>
+
+                <a class="button ghost {products_active}" href="/discover?q={q_clean}&type=products">
+                    Products
+                </a>
+
+                <a class="button ghost {stores_active}" href="/discover?q={q_clean}&type=stores">
+                    Stores
+                </a>
+            </div>
+        </section>
+
+        {f'''
+        <section>
+            <div class="section-header compact">
+                <div>
+                    <p class="eyebrow">Products</p>
+                    <h2>{'Product results' if q_clean else 'Latest products'}</h2>
+                </div>
+            </div>
+
+            <div class="grid">
+                {product_cards}
+            </div>
+        </section>
+        ''' if show_products else ''}
+
+        {f'''
+        <section>
+            <div class="section-header compact">
+                <div>
+                    <p class="eyebrow">Stores</p>
+                    <h2>{'Store results' if q_clean else 'Top selling stores'}</h2>
+                </div>
+            </div>
+
+            <div class="grid">
+                {store_cards}
+            </div>
+        </section>
+        ''' if show_stores else ''}
+    </div>
+    """, title="Discover")
 
 # -----------------------------
 # AI BUILDER
@@ -5546,30 +5803,48 @@ def reset_stripe_connect(request: Request):
 
 
 @app.get("/track", response_class=HTMLResponse)
-def track_lookup_page():
-    return layout("""
+def track_lookup_page(request: Request):
+    return layout(f"""
     <div class="container narrow center">
         <div class="panel">
             <p class="eyebrow">Order Tracking</p>
             <h1>Track your order</h1>
-            <p class="muted">Enter your order ID and email to view your shipping status.</p>
+            <p class="muted">
+                Enter your order ID and the email used at checkout.
+            </p>
 
             <form action="/track" method="post">
                 <label>Order ID</label>
-                <input name="order_id" placeholder="Example: 12">
+                <input
+                    name="order_id"
+                    type="number"
+                    min="1"
+                    placeholder="Example: 12"
+                    required
+                >
 
                 <label>Email used at checkout</label>
-                <input name="customer_email" type="email" placeholder="you@example.com">
+                <input
+                    name="customer_email"
+                    type="email"
+                    placeholder="you@example.com"
+                    required
+                >
 
                 <button type="submit">Find Order</button>
             </form>
         </div>
     </div>
-    """)
+    """, title="Track Order")
 
 
 @app.post("/track")
-def track_lookup(order_id: int = Form(...), customer_email: str = Form(...)):
+def track_lookup(
+    order_id: int = Form(...),
+    customer_email: str = Form(...)
+):
+    clean_email = customer_email.strip().lower()
+
     conn = db()
     cur = conn.cursor()
 
@@ -5577,8 +5852,8 @@ def track_lookup(order_id: int = Form(...), customer_email: str = Form(...)):
     SELECT *
     FROM orders
     WHERE id = ?
-    AND LOWER(customer_email) = LOWER(?)
-    """, (order_id, customer_email.strip()))
+    AND LOWER(customer_email) = ?
+    """, (order_id, clean_email))
 
     order = cur.fetchone()
     conn.close()
@@ -5587,14 +5862,24 @@ def track_lookup(order_id: int = Form(...), customer_email: str = Form(...)):
         return layout("""
         <div class="container narrow center">
             <div class="panel">
+                <p class="eyebrow">Order Tracking</p>
                 <h1>Order not found</h1>
-                <p>Please check your order ID and email.</p>
-                <a class="button" href="/track">Try again</a>
+                <p class="muted">
+                    Please check your order ID and email, then try again.
+                </p>
+
+                <a class="button" href="/track">
+                    Try again
+                </a>
             </div>
         </div>
-        """)
+        """, title="Order Not Found")
 
-    return RedirectResponse(f"/track-order/{order_id}", status_code=303)
+    return RedirectResponse(
+        f"/track-order/{order_id}",
+        status_code=303
+    )
+
 
 @app.get("/clear-stripe-account")
 def clear_stripe_account(request: Request):
