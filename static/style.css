@@ -3937,3 +3937,26 @@ select option {
         bottom: 0 !important;
     }
 }
+@media (max-width: 768px) {
+    .desktop-only-chat {
+        display: none !important;
+    }
+
+    .chat-sidebar {
+        display: block !important;
+        width: 100% !important;
+        max-height: none !important;
+        height: 100% !important;
+        overflow-y: auto !important;
+        border-right: none !important;
+    }
+
+    .chat-layout {
+        display: block !important;
+        height: 100% !important;
+    }
+
+    .chat-conversation-list {
+        display: block !important;
+    }
+}
