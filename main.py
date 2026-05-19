@@ -5429,30 +5429,37 @@ def stripe_connect_refresh(request: Request):
 
 @app.get("/stripe-connect-return")
 def stripe_connect_return(request: Request):
+
     user = require_user(request)
 
     if not user:
         return RedirectResponse("/login", status_code=303)
 
-    if not user["stripe_account_id"]:
-        return RedirectResponse("/settings", status_code=303)
+    conn = db()
+    cur = conn.cursor()
 
     try:
-        account = stripe.Account.retrieve(user["stripe_account_id"])
 
-        print("STRIPE RETURN ACCOUNT:", user["stripe_account_id"])
-        print("details_submitted:", account.details_submitted)
-        print("charges_enabled:", account.charges_enabled)
-        print("payouts_enabled:", account.payouts_enabled)
+        cur.execute(
+            "SELECT stripe_account_id FROM users WHERE id = ?",
+            (user["id"],)
+        )
 
-        onboarding_complete = 1 if (
-            account.details_submitted and
-            account.charges_enabled and
-            account.payouts_enabled
-        ) else 0
+        row = cur.fetchone()
 
-        conn = db()
-        cur = conn.cursor()
+        if not row or not row["stripe_account_id"]:
+            conn.close()
+            return RedirectResponse("/settings", status_code=303)
+
+        stripe_account_id = row["stripe_account_id"]
+
+        account = stripe.Account.retrieve(stripe_account_id)
+
+        onboarding_complete = (
+            account.details_submitted
+            and account.charges_enabled
+            and account.payouts_enabled
+        )
 
         cur.execute(
             """
@@ -5460,14 +5467,20 @@ def stripe_connect_return(request: Request):
             SET stripe_onboarding_complete = ?
             WHERE id = ?
             """,
-            (onboarding_complete, user["id"])
+            (1 if onboarding_complete else 0, user["id"])
         )
 
         conn.commit()
-        conn.close()
+
+        print("CONNECTED:", onboarding_complete)
+        print("ACCOUNT:", stripe_account_id)
 
     except Exception as e:
-        print("Stripe Connect return error:", e)
+
+        print("STRIPE CONNECT RETURN ERROR")
+        print(str(e))
+
+    conn.close()
 
     return RedirectResponse("/settings", status_code=303)
 
