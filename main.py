@@ -782,23 +782,24 @@ def layout(content, title="LaunchFlow"):
                 }});
             }});
 
-            function shareLaunchFlowLink(url, title) {{
-                if (navigator.share) {{
-                    navigator.share({{
-                        title: title,
-                        url: url
-                    }}).catch(function () {{}});
-                }} else {{
-                    copyLaunchFlowLink(url);
-                }}
-            }}
-
             function copyLaunchFlowLink(url) {{
                 navigator.clipboard.writeText(url).then(function () {{
                     alert("Link copied!");
                 }}).catch(function () {{
                     prompt("Copy this link:", url);
                 }});
+            }}
+
+            function shareLaunchFlowLink(url, title) {{
+                if (navigator.share) {{
+                    navigator.share({{
+                        title: title || "LaunchFlow",
+                        text: "Check this out on LaunchFlow",
+                        url: url
+                    }});
+                }} else {{
+                    copyLaunchFlowLink(url);
+                }}
             }}
 
             async function refreshUnreadCount() {{
@@ -900,7 +901,6 @@ def layout(content, title="LaunchFlow"):
 
                 searchInput.addEventListener("input", function() {{
                     clearTimeout(chatSearchTimer);
-
                     const value = this.value;
 
                     chatSearchTimer = setTimeout(() => {{
@@ -1011,7 +1011,6 @@ def layout(content, title="LaunchFlow"):
                             Message failed to send.
                         </div>
                     `;
-
                     messages.scrollTop = messages.scrollHeight;
                 }}
 
@@ -1042,7 +1041,6 @@ def layout(content, title="LaunchFlow"):
                 chatWindow.classList.add("open");
 
                 await renderInbox();
-
                 await openExistingConversation(data.conversation_id);
             }}
 
@@ -2030,6 +2028,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
         cur.execute("""
         SELECT
             store_items.*,
+            store_items.id AS item_id,
             products.name AS store_name,
             products.slug AS store_slug,
             products.theme AS store_theme,
@@ -2050,6 +2049,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
         cur.execute("""
         SELECT
             store_items.*,
+            store_items.id AS item_id,
             products.name AS store_name,
             products.slug AS store_slug,
             products.theme AS store_theme,
@@ -2121,7 +2121,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
                 </p>
 
                 <div class="actions">
-                    <a href="/product/{item["id"]}">
+                    <a href="/product/{item["item_id"]}">
                         View Product
                     </a>
 
@@ -2271,6 +2271,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
         ''' if show_stores else ''}
     </div>
     """, title="Discover")
+
 
 # -----------------------------
 # AI BUILDER
@@ -3507,7 +3508,7 @@ def product_detail(request: Request, item_id: int):
         <button
             type="button"
             class="button ghost"
-            onclick="openSellerChat('{seller["id"]}', `{store["name"]}`)"
+            onclick="openSellerChat('{seller["id"]}', `{store["name"]}`, '{store["id"]}')"
         >
             Message Seller
         </button>
@@ -3664,6 +3665,7 @@ def product_detail(request: Request, item_id: int):
         html,
         title=item["name"]
     )
+
 
 
 @app.get("/product/{item_id}/edit", response_class=HTMLResponse)
