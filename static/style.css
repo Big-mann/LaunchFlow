@@ -3986,3 +3986,9 @@ select option {
     background: rgba(255,255,255,0.18) !important;
     border-color: rgba(255,255,255,0.28) !important;
 }
+.public-store-nav-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}

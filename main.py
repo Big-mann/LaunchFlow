@@ -3210,7 +3210,7 @@ def public_store(request: Request, slug: str):
         </div>
         """
 
-    dashboard_link = f'<a href="/dashboard">Dashboard</a>' if is_owner else ""
+    dashboard_link = '<a href="/dashboard">Dashboard</a>' if user else ""
     add_product_link = f'<a href="/stores/{p["slug"]}/add-product">Add Product</a>' if is_owner else ""
 
     hero_action = ""
@@ -3241,7 +3241,7 @@ def public_store(request: Request, slug: str):
         <nav class="public-store-nav">
             <strong>{p["name"]}</strong>
 
-            <div>
+            <div class="public-store-nav-actions">
                 {dashboard_link}
                 <a href="#products">Products</a>
                 {add_product_link}
@@ -3303,6 +3303,7 @@ def public_store(request: Request, slug: str):
         </section>
     </div>
     """, title=p["name"])
+
 
 
 @app.post("/publish-store/{store_id}")
