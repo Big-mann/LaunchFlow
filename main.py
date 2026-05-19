@@ -547,16 +547,19 @@ async def chat_send(request: Request):
     ))
 
     conn.commit()
+    message_id = cur.lastrowid
     conn.close()
 
     return {
         "ok": True,
         "message": {
+            "id": message_id,
             "conversation_id": conversation_id,
             "sender_type": sender_type,
             "sender_user_id": user["id"],
             "sender_email": user["email"],
-            "message": message
+            "message": message,
+            "mine": True
         }
     }
 
