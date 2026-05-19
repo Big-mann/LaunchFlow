@@ -4003,3 +4003,14 @@ select option {
     background: rgba(255,255,255,0.18) !important;
     border-color: rgba(255,255,255,0.28) !important;
 }
+.share-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 16px 0;
+}
+
+.share-row .button {
+    flex: 1;
+    min-width: 130px;
+}

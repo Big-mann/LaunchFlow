@@ -782,6 +782,25 @@ def layout(content, title="LaunchFlow"):
                 }});
             }});
 
+            function shareLaunchFlowLink(url, title) {{
+                if (navigator.share) {{
+                    navigator.share({{
+                        title: title,
+                        url: url
+                    }}).catch(function () {{}});
+                }} else {{
+                    copyLaunchFlowLink(url);
+                }}
+            }}
+
+            function copyLaunchFlowLink(url) {{
+                navigator.clipboard.writeText(url).then(function () {{
+                    alert("Link copied!");
+                }}).catch(function () {{
+                    prompt("Copy this link:", url);
+                }});
+            }}
+
             async function refreshUnreadCount() {{
                 const res = await fetch("/chat/unread-count");
                 const data = await res.json();
@@ -3383,7 +3402,6 @@ def product_detail(request: Request, item_id: int):
 
     if not item:
         conn.close()
-
         return layout("""
         <div class="container">
             <div class="panel">
@@ -3495,6 +3513,28 @@ def product_detail(request: Request, item_id: int):
         </button>
         """
 
+    product_share_url = f"{BASE_URL}/product/{item['id']}"
+
+    share_buttons = f"""
+    <div class="share-row">
+        <button
+            type="button"
+            class="button ghost"
+            onclick="shareLaunchFlowLink('{product_share_url}', `{item["name"]}`)"
+        >
+            Share Product
+        </button>
+
+        <button
+            type="button"
+            class="button ghost"
+            onclick="copyLaunchFlowLink('{product_share_url}')"
+        >
+            Copy Link
+        </button>
+    </div>
+    """
+
     html = f"""
     <div class="container">
 
@@ -3565,6 +3605,8 @@ def product_detail(request: Request, item_id: int):
                     {message_button}
 
                 </div>
+
+                {share_buttons}
 
                 <form
                     action="/checkout-item/{item["id"]}"
