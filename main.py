@@ -2707,6 +2707,9 @@ def upgrade_page(request: Request, reason: str = ""):
     if not user:
         return RedirectResponse("/login", status_code=303)
 
+    if user["is_pro"]:
+        return RedirectResponse("/settings", status_code=303)
+
     reason_text = ""
 
     if reason == "store_limit":
@@ -2718,22 +2721,35 @@ def upgrade_page(request: Request, reason: str = ""):
     <div class="container narrow">
         {top_nav(user)}
 
-        <section class="hero center">
-            <p class="eyebrow">Upgrade</p>
-            <h1>Upgrade to Premium</h1>
-            <p>{reason_text or "Unlock more stores, AI generation, premium templates, and advanced tools."}</p>
+        <section class="upgrade-hero">
+            <p class="eyebrow">Premium</p>
 
-            <div class="panel" style="margin-top:24px;">
-                <h2>Premium Plan</h2>
-                <p class="muted">More stores, more AI features, and more control.</p>
+            <h1>Unlock the full LaunchFlow system.</h1>
+
+            <p>
+                {reason_text or "Upgrade once and get access to more stores, AI tools, premium templates, and advanced selling features."}
+            </p>
+
+            <div class="premium-feature-card">
+                <h2>Premium includes</h2>
+
+                <div class="premium-feature-list">
+                    <div class="premium-feature-item">More stores</div>
+                    <div class="premium-feature-item">AI store generation</div>
+                    <div class="premium-feature-item">Premium templates</div>
+                    <div class="premium-feature-item">Advanced store tools</div>
+                    <div class="premium-feature-item">Better customization</div>
+                    <div class="premium-feature-item">Seller growth features</div>
+                    <div class="premium-feature-item">Priority improvements</div>
+                </div>
 
                 <form action="/create-checkout-session" method="post">
-                    <button type="submit">Upgrade</button>
+                    <button type="submit">Upgrade to Premium</button>
                 </form>
 
-                <div style="margin-top:14px;">
-                    <a class="button ghost" href="/dashboard">Back to Dashboard</a>
-                </div>
+                <a class="button ghost" href="/dashboard">
+                    Back to Dashboard
+                </a>
             </div>
         </section>
     </div>
@@ -3698,23 +3714,11 @@ def checkout_item(
 
         return layout(f"""
         <div class="container narrow center">
-
             <div class="panel">
-
-                <h1>
-                    Not enough stock
-                </h1>
-
-                <p>
-                    Only {item["stock"]} left in stock.
-                </p>
-
-                <a class="button" href="/product/{item_id}">
-                    Back to product
-                </a>
-
+                <h1>Not enough stock</h1>
+                <p>Only {item["stock"]} left in stock.</p>
+                <a class="button" href="/product/{item_id}">Back to product</a>
             </div>
-
         </div>
         """)
 
@@ -3734,69 +3738,49 @@ def checkout_item(
 
         return layout("""
         <div class="container narrow center">
-
             <div class="panel">
-
-                <h1>
-                    Seller payments not ready
-                </h1>
-
-                <p>
-                    This seller has not finished Stripe setup yet.
-                </p>
-
-                <a class="button" href="/">
-                    Back home
-                </a>
-
+                <h1>Seller payments not ready</h1>
+                <p>This seller has not finished Stripe setup yet.</p>
+                <a class="button" href="/">Back home</a>
             </div>
-
         </div>
         """)
 
     amount_cents = int(float(item["price"]) * 100)
-
     total_cents = amount_cents * quantity
-
     platform_fee = int(total_cents * 0.10)
 
     conn.close()
 
+    base_url = os.getenv("BASE_URL", BASE_URL)
+
     checkout_session = stripe.checkout.Session.create(
-
         payment_method_types=["card"],
-
         mode="payment",
-
         customer_email=customer_email,
 
         line_items=[
             {
                 "price_data": {
                     "currency": "usd",
-
                     "product_data": {
                         "name": item["name"],
                         "description": item["description"],
                     },
-
                     "unit_amount": amount_cents,
                 },
-
                 "quantity": quantity,
             }
         ],
 
         payment_intent_data={
             "application_fee_amount": platform_fee,
-
             "transfer_data": {
                 "destination": seller["stripe_account_id"],
             },
         },
 
         metadata={
-
             "store_item_id": str(item["id"]),
             "store_id": str(item["store_id"]),
             "seller_id": str(item["user_id"]),
@@ -3817,9 +3801,8 @@ def checkout_item(
             "buyer_message": buyer_message,
         },
 
-        success_url=f"{BASE_URL}/success-item/{item_id}?session_id={{CHECKOUT_SESSION_ID}}",
-
-        cancel_url=f"{BASE_URL}/product/{item_id}",
+        success_url=f"{base_url}/success-item/{item_id}?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{base_url}/product/{item_id}",
     )
 
     return RedirectResponse(
@@ -3838,7 +3821,6 @@ def success_item(item_id: int, session_id: str = ""):
         )
 
     try:
-
         session = stripe.checkout.Session.retrieve(session_id)
 
         if (
@@ -3851,7 +3833,6 @@ def success_item(item_id: int, session_id: str = ""):
             )
 
     except Exception as e:
-
         print("Product checkout success error:", e)
 
         return RedirectResponse(
@@ -3873,7 +3854,7 @@ def success_item(item_id: int, session_id: str = ""):
         conn.close()
 
         return layout("""
-        <div class='container'>
+        <div class="container">
             <h1>Product not found</h1>
         </div>
         """)
@@ -3888,54 +3869,35 @@ def success_item(item_id: int, session_id: str = ""):
     order_id = None
 
     if existing_order:
-
         order_id = existing_order["id"]
 
     else:
-
         quantity = int(
             session.metadata.get("quantity", "1")
         )
 
         if item["stock"] < quantity:
-
             conn.close()
 
             return layout("""
             <div class="container narrow center">
-
                 <div class="panel">
-
-                    <h1>
-                        Stock issue
-                    </h1>
-
+                    <h1>Stock issue</h1>
                     <p>
                         This order was paid, but there is not enough stock left.
                     </p>
-
-                    <a class="button" href="/">
-                        Back home
-                    </a>
-
+                    <a class="button" href="/">Back home</a>
                 </div>
-
             </div>
             """)
 
-        customer_email = (
-            session.metadata.get("customer_email", "")
-        )
-
-        customer_name = (
-            session.metadata.get("customer_name", "")
-        )
+        customer_email = session.metadata.get("customer_email", "")
+        customer_name = session.metadata.get("customer_name", "")
 
         total_amount = float(item["price"]) * quantity
 
         cur.execute("""
         INSERT INTO orders (
-
             product_id,
             store_item_id,
             amount,
@@ -3962,11 +3924,9 @@ def success_item(item_id: int, session_id: str = ""):
             fulfillment_status,
 
             buyer_message
-
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-
             item["store_id"],
             item["id"],
 
@@ -3999,7 +3959,12 @@ def success_item(item_id: int, session_id: str = ""):
         order_id = cur.lastrowid
 
         cur.execute(
-            "UPDATE store_items SET stock = stock - ? WHERE id = ? AND stock >= ?",
+            """
+            UPDATE store_items
+            SET stock = stock - ?
+            WHERE id = ?
+            AND stock >= ?
+            """,
             (quantity, item_id, quantity)
         )
 
@@ -4009,16 +3974,10 @@ def success_item(item_id: int, session_id: str = ""):
 
     return layout(f"""
     <div class="container narrow center">
-
         <div class="panel success-panel">
+            <h1>Payment successful 🎉</h1>
 
-            <h1>
-                Payment successful 🎉
-            </h1>
-
-            <p>
-                Your order has been confirmed.
-            </p>
+            <p>Your order has been confirmed.</p>
 
             <p class="muted">
                 Order ID:
@@ -4026,7 +3985,6 @@ def success_item(item_id: int, session_id: str = ""):
             </p>
 
             <div class="success-actions">
-
                 <a class="button" href="/track-order/{order_id}">
                     Track your order
                 </a>
@@ -4034,13 +3992,11 @@ def success_item(item_id: int, session_id: str = ""):
                 <a class="button ghost" href="/">
                     Back home
                 </a>
-
             </div>
-
         </div>
-
     </div>
     """)
+
 
 # -----------------------------
 # EDIT / DELETE
@@ -5267,54 +5223,38 @@ def settings(request: Request):
         connect_status = """
         <div class="settings-status success">
             <strong>Stripe connected</strong>
-
-            <p>
-                Your account is ready to accept payments and receive payouts.
-            </p>
+            <p>Your account is ready to accept payments and receive payouts.</p>
         </div>
         """
-
-        connect_button_text = "Manage Stripe"
+        connect_button_text = "Manage Payouts"
 
     elif user["stripe_account_id"]:
         connect_status = """
         <div class="settings-status warning">
             <strong>Stripe onboarding incomplete</strong>
-
-            <p>
-                Finish setup before customers can buy your products.
-            </p>
+            <p>Finish setup before customers can buy your products.</p>
         </div>
         """
-
-        connect_button_text = "Finish Stripe Setup"
+        connect_button_text = "Complete Setup"
 
     else:
         connect_status = """
         <div class="settings-status warning">
             <strong>Stripe not connected</strong>
-
-            <p>
-                Connect Stripe so customers can purchase from your stores.
-            </p>
+            <p>Connect Stripe so customers can purchase from your stores.</p>
         </div>
         """
-
         connect_button_text = "Connect Stripe"
 
     return layout(f"""
     <div class="container narrow">
         {top_nav(user)}
 
-        <a class="back" href="/dashboard">
-            ← Dashboard
-        </a>
+        <a class="back" href="/dashboard">← Dashboard</a>
 
         <section class="hero settings-hero">
             <p class="eyebrow">Settings</p>
-
             <h1>Manage your account.</h1>
-
             <p>
                 Update your seller profile, connect payments,
                 and manage your LaunchFlow plan.
@@ -5325,42 +5265,27 @@ def settings(request: Request):
 
             <div class="panel settings-panel">
                 <p class="eyebrow">Profile</p>
-
                 <h2>Account Settings</h2>
 
                 <form action="/settings" method="post">
-
                     <label>Email</label>
-                    <input
-                        name="email"
-                        value="{user["email"]}"
-                        disabled
-                    >
+                    <input name="email" value="{user["email"]}" disabled>
 
                     <label>Store owner name</label>
-                    <input
-                        name="store_name"
-                        value="{user["store_name"] or "My Store"}"
-                    >
+                    <input name="store_name" value="{user["store_name"] or "My Store"}">
 
-                    <button type="submit">
-                        Save Settings
-                    </button>
-
+                    <button type="submit">Save Settings</button>
                 </form>
             </div>
 
             <div class="panel settings-panel">
                 <p class="eyebrow">Payments</p>
-
                 <h2>Stripe Connect</h2>
 
                 {connect_status}
 
                 <form action="/connect-stripe" method="post">
-                    <button type="submit">
-                        {connect_button_text}
-                    </button>
+                    <button type="submit">{connect_button_text}</button>
                 </form>
 
                 <p class="settings-note">
@@ -5379,24 +5304,30 @@ def settings(request: Request):
                     premium templates, and advanced tools.
                 </p>
 
-                <a class="button" href="/upgrade">
-                    View Plans
-                </a>
+                {
+                    '''
+                    <a class="button" href="/manage-subscription">
+                        Manage Subscription
+                    </a>
+                    '''
+                    if user["is_pro"] else
+                    '''
+                    <a class="button" href="/upgrade">
+                        View Plans
+                    </a>
+                    '''
+                }
             </div>
 
             <div class="panel settings-panel">
                 <p class="eyebrow">Security</p>
-
                 <h2>Login Session</h2>
 
                 <p class="settings-note">
-                    Logged in as
-                    <strong>{user["email"]}</strong>
+                    Logged in as <strong>{user["email"]}</strong>
                 </p>
 
-                <a class="button ghost" href="/logout">
-                    Log out
-                </a>
+                <a class="button ghost" href="/logout">Log out</a>
             </div>
 
         </div>
@@ -5428,7 +5359,6 @@ def save_settings(
     conn.close()
 
     return RedirectResponse("/settings", status_code=303)
-
 
 
 @app.post("/connect-stripe")
@@ -5603,9 +5533,11 @@ def stripe_billing_portal(request: Request):
 
         customer = customers.data[0]
 
+        base_url = os.getenv("BASE_URL", "http://127.0.0.1:8000")
+
         portal_session = stripe.billing_portal.Session.create(
             customer=customer.id,
-            return_url="http://127.0.0.1:8000/dashboard"
+            return_url=f"{base_url}/dashboard"
         )
 
         return RedirectResponse(portal_session.url, status_code=303)
@@ -5613,6 +5545,7 @@ def stripe_billing_portal(request: Request):
     except Exception as e:
         print("Stripe billing portal error:", e)
         return RedirectResponse("/dashboard", status_code=303)
+
 
 @app.get("/discover", response_class=HTMLResponse)
 def discover(request: Request, q: str = ""):
