@@ -4581,7 +4581,7 @@ def analytics(request: Request):
 
 
 @app.get("/orders", response_class=HTMLResponse)
-def orders(request: Request):
+def orders(request: Request, view: str = "seller"):
 
     user = require_user(request)
 
@@ -4591,29 +4591,32 @@ def orders(request: Request):
     conn = db()
     cur = conn.cursor()
 
-    cur.execute("""
-
-    SELECT
-        orders.*,
-        products.name as store_name,
-        store_items.name as item_name
-
-    FROM orders
-
-    JOIN products
-    ON orders.product_id = products.id
-
-    LEFT JOIN store_items
-    ON orders.store_item_id = store_items.id
-
-    WHERE products.user_id = ?
-
-    ORDER BY orders.id DESC
-
-    """, (user["id"],))
+    if view == "buyer":
+        cur.execute("""
+        SELECT
+            orders.*,
+            products.name as store_name,
+            store_items.name as item_name
+        FROM orders
+        JOIN products ON orders.product_id = products.id
+        LEFT JOIN store_items ON orders.store_item_id = store_items.id
+        WHERE LOWER(orders.customer_email) = LOWER(?)
+        ORDER BY orders.id DESC
+        """, (user["email"],))
+    else:
+        cur.execute("""
+        SELECT
+            orders.*,
+            products.name as store_name,
+            store_items.name as item_name
+        FROM orders
+        JOIN products ON orders.product_id = products.id
+        LEFT JOIN store_items ON orders.store_item_id = store_items.id
+        WHERE products.user_id = ?
+        ORDER BY orders.id DESC
+        """, (user["id"],))
 
     orders_data = cur.fetchall()
-
     conn.close()
 
     rows = ""
@@ -4621,25 +4624,12 @@ def orders(request: Request):
     for o in orders_data:
 
         item_name = o["item_name"] or o["store_name"]
-
         tracking_number = o["tracking_number"] or ""
-
         shipping_carrier = o["shipping_carrier"] or ""
 
-        shipping_status = (
-            o["shipping_status"]
-            or "Not shipped yet"
-        )
-
-        fulfillment_status = (
-            o["fulfillment_status"]
-            or "New order"
-        )
-
-        buyer_message = (
-            o["buyer_message"]
-            or ""
-        )
+        shipping_status = o["shipping_status"] or "Not shipped yet"
+        fulfillment_status = o["fulfillment_status"] or "New order"
+        buyer_message = o["buyer_message"] or ""
 
         shipping_address = f"""
         {o["shipping_name"]}<br>
@@ -4652,83 +4642,16 @@ def orders(request: Request):
         track_link = ""
 
         if tracking_number:
-
             track_link = f"""
-            <a
-                class="button small"
-                href="/track-order/{o["id"]}"
-            >
+            <a class="button small" href="/track-order/{o["id"]}">
                 Track Shipping
             </a>
             """
 
-        rows += f"""
-        <div class="order-row advanced-order-row">
+        seller_controls = ""
 
-            <div class="advanced-order-top">
-
-                <div>
-
-                    <strong>
-                        {item_name}
-                    </strong>
-
-                    <p class="muted">
-                        Customer: {o["customer_email"]}
-                    </p>
-
-                    <p class="muted">
-                        Ordered: {o["created_at"]}
-                    </p>
-
-                </div>
-
-                <div class="order-price-box">
-
-                    <strong>
-                        ${money(o["amount"])}
-                    </strong>
-
-                    <p class="muted">
-                        Qty: {o["quantity"]}
-                    </p>
-
-                    <p class="muted">
-                        Payment: {o["payment_status"]}
-                    </p>
-
-                </div>
-
-            </div>
-
-            <div class="order-grid">
-
-                <div class="order-box">
-
-                    <h3>
-                        Shipping Address
-                    </h3>
-
-                    <p>
-                        {shipping_address}
-                    </p>
-
-                </div>
-
-                <div class="order-box">
-
-                    <h3>
-                        Buyer Message
-                    </h3>
-
-                    <p>
-                        {buyer_message or "No buyer message."}
-                    </p>
-
-                </div>
-
-            </div>
-
+        if view != "buyer":
+            seller_controls = f"""
             <form
                 action="/orders/{o["id"]}/shipping"
                 method="post"
@@ -4738,31 +4661,23 @@ def orders(request: Request):
                 <div class="form-grid">
 
                     <div>
-
-                        <label>
-                            Carrier
-                        </label>
+                        <label>Carrier</label>
 
                         <input
                             name="shipping_carrier"
                             value="{shipping_carrier}"
                             placeholder="USPS, UPS, FedEx"
                         >
-
                     </div>
 
                     <div>
-
-                        <label>
-                            Tracking Number
-                        </label>
+                        <label>Tracking Number</label>
 
                         <input
                             name="tracking_number"
                             value="{tracking_number}"
                             placeholder="Tracking number"
                         >
-
                     </div>
 
                 </div>
@@ -4770,107 +4685,100 @@ def orders(request: Request):
                 <div class="form-grid">
 
                     <div>
-
-                        <label>
-                            Shipping Status
-                        </label>
+                        <label>Shipping Status</label>
 
                         <select name="shipping_status">
-
-                            <option
-                                value="Not shipped yet"
-                                {"selected" if shipping_status == "Not shipped yet" else ""}
-                            >
-                                Not shipped yet
-                            </option>
-
-                            <option
-                                value="Processing"
-                                {"selected" if shipping_status == "Processing" else ""}
-                            >
-                                Processing
-                            </option>
-
-                            <option
-                                value="Shipped"
-                                {"selected" if shipping_status == "Shipped" else ""}
-                            >
-                                Shipped
-                            </option>
-
-                            <option
-                                value="Delivered"
-                                {"selected" if shipping_status == "Delivered" else ""}
-                            >
-                                Delivered
-                            </option>
-
+                            <option value="Not shipped yet" {"selected" if shipping_status == "Not shipped yet" else ""}>Not shipped yet</option>
+                            <option value="Processing" {"selected" if shipping_status == "Processing" else ""}>Processing</option>
+                            <option value="Shipped" {"selected" if shipping_status == "Shipped" else ""}>Shipped</option>
+                            <option value="Delivered" {"selected" if shipping_status == "Delivered" else ""}>Delivered</option>
                         </select>
-
                     </div>
 
                     <div>
-
-                        <label>
-                            Fulfillment Status
-                        </label>
+                        <label>Fulfillment Status</label>
 
                         <select name="fulfillment_status">
-
-                            <option
-                                value="New order"
-                                {"selected" if fulfillment_status == "New order" else ""}
-                            >
-                                New order
-                            </option>
-
-                            <option
-                                value="Packing"
-                                {"selected" if fulfillment_status == "Packing" else ""}
-                            >
-                                Packing
-                            </option>
-
-                            <option
-                                value="Ready to ship"
-                                {"selected" if fulfillment_status == "Ready to ship" else ""}
-                            >
-                                Ready to ship
-                            </option>
-
-                            <option
-                                value="Completed"
-                                {"selected" if fulfillment_status == "Completed" else ""}
-                            >
-                                Completed
-                            </option>
-
+                            <option value="New order" {"selected" if fulfillment_status == "New order" else ""}>New order</option>
+                            <option value="Packing" {"selected" if fulfillment_status == "Packing" else ""}>Packing</option>
+                            <option value="Ready to ship" {"selected" if fulfillment_status == "Ready to ship" else ""}>Ready to ship</option>
+                            <option value="Completed" {"selected" if fulfillment_status == "Completed" else ""}>Completed</option>
                         </select>
-
                     </div>
 
                 </div>
 
                 <div class="order-actions">
-
                     <button type="submit">
                         Save Order Updates
                     </button>
 
                     {track_link}
-
                 </div>
 
             </form>
+            """
+        else:
+            seller_controls = f"""
+            <div class="order-actions">
+                {track_link}
+            </div>
+            """
+
+        rows += f"""
+        <div class="order-row advanced-order-row">
+
+            <div class="advanced-order-top">
+
+                <div>
+                    <strong>{item_name}</strong>
+
+                    <p class="muted">
+                        {"Store" if view == "buyer" else "Customer"}: {o["store_name"] if view == "buyer" else o["customer_email"]}
+                    </p>
+
+                    <p class="muted">
+                        Ordered: {o["created_at"]}
+                    </p>
+                </div>
+
+                <div class="order-price-box">
+                    <strong>${money(o["amount"])}</strong>
+
+                    <p class="muted">
+                        Qty: {o["quantity"]}
+                    </p>
+
+                    <p class="muted">
+                        Payment: {o["payment_status"]}
+                    </p>
+                </div>
+
+            </div>
+
+            <div class="order-grid">
+
+                <div class="order-box">
+                    <h3>Shipping Address</h3>
+                    <p>{shipping_address}</p>
+                </div>
+
+                <div class="order-box">
+                    <h3>Buyer Message</h3>
+                    <p>{buyer_message or "No buyer message."}</p>
+                </div>
+
+            </div>
+
+            {seller_controls}
 
         </div>
         """
 
     if not rows:
-
-        rows = """
+        rows = f"""
         <p class='muted'>
-            No orders yet.
+            {'You have not bought anything yet.' if view == 'buyer' else 'No seller orders yet.'}
         </p>
         """
 
@@ -4894,10 +4802,20 @@ def orders(request: Request):
             </h1>
 
             <p>
-                Manage customer purchases, shipping, fulfillment, and tracking.
+                {'View things you bought and track shipping.' if view == 'buyer' else 'Manage customer purchases, shipping, fulfillment, and tracking.'}
             </p>
 
         </section>
+
+        <div class="order-tabs">
+            <a class="button ghost {'active' if view == 'buyer' else ''}" href="/orders?view=buyer">
+                Buyer Orders
+            </a>
+
+            <a class="button ghost {'active' if view != 'buyer' else ''}" href="/orders?view=seller">
+                Seller Orders
+            </a>
+        </div>
 
         <div class="orders-wrapper">
             {rows}
@@ -4909,19 +4827,12 @@ def orders(request: Request):
 
 @app.post("/orders/{order_id}/shipping")
 def update_order_shipping(
-
     request: Request,
-
     order_id: int,
-
     shipping_carrier: str = Form(""),
-
     tracking_number: str = Form(""),
-
     shipping_status: str = Form("Not shipped yet"),
-
     fulfillment_status: str = Form("New order")
-
 ):
 
     user = require_user(request)
@@ -4933,45 +4844,32 @@ def update_order_shipping(
     cur = conn.cursor()
 
     cur.execute("""
-
     UPDATE orders
-
     SET
         shipping_carrier = ?,
         tracking_number = ?,
         shipping_status = ?,
         fulfillment_status = ?
-
     WHERE id = ?
-
     AND product_id IN (
         SELECT id
         FROM products
         WHERE user_id = ?
     )
-
     """, (
-
         shipping_carrier,
-
         tracking_number,
-
         shipping_status,
-
         fulfillment_status,
-
         order_id,
-
         user["id"]
-
     ))
 
     conn.commit()
-
     conn.close()
 
     return RedirectResponse(
-        "/orders",
+        "/orders?view=seller",
         status_code=303
     )
 
@@ -4983,93 +4881,51 @@ def track_order(order_id: int):
     cur = conn.cursor()
 
     cur.execute("""
-
     SELECT
         orders.*,
         products.name as store_name,
         store_items.name as item_name
-
     FROM orders
-
-    JOIN products
-    ON orders.product_id = products.id
-
-    LEFT JOIN store_items
-    ON orders.store_item_id = store_items.id
-
+    JOIN products ON orders.product_id = products.id
+    LEFT JOIN store_items ON orders.store_item_id = store_items.id
     WHERE orders.id = ?
-
     """, (order_id,))
 
     order = cur.fetchone()
-
     conn.close()
 
     if not order:
-
         return layout("""
         <div class="container narrow center">
-
             <div class="panel">
-
-                <h1>
-                    Order not found
-                </h1>
-
-                <a class="button" href="/">
-                    Back home
-                </a>
-
+                <h1>Order not found</h1>
+                <a class="button" href="/">Back home</a>
             </div>
-
         </div>
         """)
 
-    tracking_number = (
-        order["tracking_number"]
-        or ""
-    )
-
-    shipping_carrier = (
-        order["shipping_carrier"]
-        or "Not added yet"
-    )
-
-    shipping_status = (
-        order["shipping_status"]
-        or "Not shipped yet"
-    )
-
-    fulfillment_status = (
-        order["fulfillment_status"]
-        or "New order"
-    )
+    tracking_number = order["tracking_number"] or ""
+    shipping_carrier = order["shipping_carrier"] or "Not added yet"
+    shipping_status = order["shipping_status"] or "Not shipped yet"
+    fulfillment_status = order["fulfillment_status"] or "New order"
 
     tracking_link = ""
 
     if tracking_number:
-
         carrier = shipping_carrier.lower()
 
         if "usps" in carrier:
             tracking_link = f"https://tools.usps.com/go/TrackConfirmAction?tLabels={tracking_number}"
-
         elif "ups" in carrier:
             tracking_link = f"https://www.ups.com/track?tracknum={tracking_number}"
-
         elif "fedex" in carrier:
             tracking_link = f"https://www.fedex.com/fedextrack/?trknbr={tracking_number}"
 
     track_button = ""
 
     if tracking_link:
-
         track_button = f"""
-        <a
-            class="button"
-            href="{tracking_link}"
-            target="_blank"
-        >
+        <a class="button" href="{tracking_link}" target="_blank">
             Track Package
         </a>
         """
@@ -5090,73 +4946,45 @@ def track_order(order_id: int):
             <div class="tracking-grid">
 
                 <div class="tracking-box">
-
                     <span>Item</span>
-
-                    <strong>
-                        {order["item_name"] or order["store_name"]}
-                    </strong>
-
+                    <strong>{order["item_name"] or order["store_name"]}</strong>
                 </div>
 
                 <div class="tracking-box">
-
                     <span>Shipping Status</span>
-
-                    <strong>
-                        {shipping_status}
-                    </strong>
-
+                    <strong>{shipping_status}</strong>
                 </div>
 
                 <div class="tracking-box">
-
                     <span>Fulfillment</span>
-
-                    <strong>
-                        {fulfillment_status}
-                    </strong>
-
+                    <strong>{fulfillment_status}</strong>
                 </div>
 
                 <div class="tracking-box">
-
                     <span>Carrier</span>
-
-                    <strong>
-                        {shipping_carrier}
-                    </strong>
-
+                    <strong>{shipping_carrier}</strong>
                 </div>
 
             </div>
 
             <div class="tracking-number-box">
-
-                <span>
-                    Tracking Number
-                </span>
-
-                <strong>
-                    {tracking_number or "Not added yet"}
-                </strong>
-
+                <span>Tracking Number</span>
+                <strong>{tracking_number or "Not added yet"}</strong>
             </div>
 
             <div class="tracking-actions">
-
                 {track_button}
 
-                <a class="button ghost" href="/">
-                    Back home
+                <a class="button ghost" href="/orders?view=buyer">
+                    Back to orders
                 </a>
-
             </div>
 
         </div>
 
     </div>
     """, title="Track Order")
+
 
 @app.post("/messages/start")
 def start_message(
