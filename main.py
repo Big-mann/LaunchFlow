@@ -1711,14 +1711,14 @@ def dashboard(request: Request):
             </div>
 
             <div class="store-actions">
-                <a href="/s/{p["slug"]}">View Store</a>
-                <a href="/stores/{p["slug"]}/add-product">Add Product</a>
-                <a href="/edit/{p["id"]}">Edit</a>
+                <a class="button small ghost" href="/s/{p["slug"]}">View Store</a>
+                <a class="button small ghost" href="/stores/{p["slug"]}/add-product">Add Product</a>
+                <a class="button small ghost" href="/edit/{p["id"]}">Edit</a>
 
                 <button
                     type="button"
                     class="button small ghost"
-                    onclick="shareLaunchFlowLink(window.location.origin + '/s/{p["slug"]}', `{p["name"]}`)"
+                    onclick="shareLaunchFlowLink(window.location.origin + '/s/{p["slug"]}', '{p["name"]}')"
                 >
                     Share
                 </button>
@@ -2166,7 +2166,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
                 </p>
 
                 <div class="actions">
-                    <a href="/product/{item["item_id"]}">
+                    <a class="button small ghost" href="/product/{item["item_id"]}">
                         View Product
                     </a>
 
@@ -2221,7 +2221,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
                 </p>
 
                 <div class="actions">
-                    <a href="/s/{p["slug"]}">
+                    <a class="button small ghost" href="/s/{p["slug"]}">
                         View Store
                     </a>
 
