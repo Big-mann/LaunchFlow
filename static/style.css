@@ -4043,3 +4043,9 @@ select option {
     flex: 1;
     min-width: 130px;
 }
+.chat-input-row textarea {
+    width: 100% !important;
+    min-height: 46px !important;
+    max-height: 120px !important;
+    resize: vertical !important;
+}

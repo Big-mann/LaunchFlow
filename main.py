@@ -508,6 +508,9 @@ async def chat_send(request: Request):
     conversation_id = int(data.get("conversation_id", 0))
     message = str(data.get("message", "")).strip()
 
+    if len(message) > 5000:
+        return {"ok": False, "error": "Message is too long"}
+
     if conversation_id <= 0:
         return {"ok": False, "error": "Missing conversation"}
 
@@ -565,6 +568,7 @@ async def chat_send(request: Request):
             "sender_user_id": user["id"],
             "sender_email": user["email"],
             "message": message,
+            "created_at": "Just now",
             "mine": True
         }
     }
@@ -599,6 +603,7 @@ def chat_unread_count(request: Request):
         "ok": True,
         "unread": count or 0
     }
+
 
 
 # -----------------------------
@@ -970,13 +975,14 @@ def layout(content, title="LaunchFlow"):
                             </div>
 
                             <form class="chat-input-row" onsubmit="return sendChatMessage(event)">
-                                <input
-                                    type="text"
+                                <textarea
                                     id="chat-input"
                                     placeholder="Type a message..."
                                     autocomplete="off"
                                     required
-                                >
+                                    rows="2"
+                                ></textarea>
+
                                 <button type="submit">Send</button>
                             </form>
                         </div>
@@ -995,8 +1001,9 @@ def layout(content, title="LaunchFlow"):
                 const input = document.getElementById("chat-input");
                 const messages = document.getElementById("chat-messages");
                 const text = input.value.trim();
+                const activeConversationId = currentConversationId;
 
-                if (!text || !currentConversationId || !messages) {{
+                if (!text || !activeConversationId || !messages) {{
                     return false;
                 }}
 
@@ -1016,7 +1023,7 @@ def layout(content, title="LaunchFlow"):
                         "Content-Type": "application/json"
                     }},
                     body: JSON.stringify({{
-                        conversation_id: currentConversationId,
+                        conversation_id: activeConversationId,
                         message: text
                     }})
                 }});
@@ -1031,6 +1038,15 @@ def layout(content, title="LaunchFlow"):
                     `;
 
                     messages.scrollTop = messages.scrollHeight;
+                }}
+
+                if (data.ok) {{
+                    const inboxRes = await fetch("/chat/inbox");
+                    const inboxData = await inboxRes.json();
+
+                    if (inboxData.ok) {{
+                        currentInbox = inboxData.conversations || [];
+                    }}
                 }}
 
                 refreshUnreadCount();
