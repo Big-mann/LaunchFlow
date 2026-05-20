@@ -789,20 +789,24 @@ def layout(content, title="LaunchFlow"):
             }});
 
             async function shareLaunchFlowLink(url, title) {{
-                if (navigator.share) {{
-                    try {{
+                try {{
+                    if (navigator.share) {{
                         await navigator.share({{
                             title: title || "LaunchFlow",
+                            text: "Check this out on LaunchFlow",
                             url: url
                         }});
-                    }} catch (err) {{}}
-                }} else {{
-                    try {{
-                        await navigator.clipboard.writeText(url);
-                        alert("Link copied!");
-                    }} catch (err) {{
-                        prompt("Copy this link:", url);
+                        return;
                     }}
+                }} catch (err) {{
+                    console.log("Share failed, copying instead.");
+                }}
+
+                try {{
+                    await navigator.clipboard.writeText(url);
+                    alert("Link copied!");
+                }} catch (err) {{
+                    prompt("Copy this link:", url);
                 }}
             }}
 
@@ -1101,6 +1105,7 @@ def layout(content, title="LaunchFlow"):
     </body>
     </html>
     """
+
 
 
 def top_nav(user):
@@ -1693,6 +1698,14 @@ def dashboard(request: Request):
                 <a href="/s/{p["slug"]}">View Store</a>
                 <a href="/stores/{p["slug"]}/add-product">Add Product</a>
                 <a href="/edit/{p["id"]}">Edit</a>
+
+                <button
+                    type="button"
+                    class="button small ghost"
+                    onclick="shareLaunchFlowLink(window.location.origin + '/s/{p["slug"]}', `{p["name"]}`)"
+                >
+                    Share
+                </button>
             </div>
 
             <div class="store-footer">
