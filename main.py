@@ -5620,7 +5620,7 @@ def connect_stripe(request: Request):
 
             conn.commit()
 
-        base_url = os.getenv("BASE_URL", "http://127.0.0.1:8000")
+        base_url = os.getenv("BASE_URL", "https://launchflow.store").rstrip("/")
 
         account_link = stripe.AccountLink.create(
             account=stripe_account_id,
@@ -5684,10 +5684,19 @@ def stripe_connect_return(request: Request):
 
         account = stripe.Account.retrieve(stripe_account_id)
 
+        requirements_due = []
+        currently_due = []
+        eventually_due = []
+
+        if hasattr(account, "requirements") and account.requirements:
+            requirements_due = account.requirements.past_due or []
+            currently_due = account.requirements.currently_due or []
+            eventually_due = account.requirements.eventually_due or []
+
         onboarding_complete = (
             account.details_submitted
-            and account.charges_enabled
-            and account.payouts_enabled
+            and len(requirements_due) == 0
+            and len(currently_due) == 0
         )
 
         cur.execute(
@@ -5707,9 +5716,12 @@ def stripe_connect_return(request: Request):
         print("DETAILS:", account.details_submitted)
         print("CHARGES:", account.charges_enabled)
         print("PAYOUTS:", account.payouts_enabled)
+        print("CURRENTLY DUE:", currently_due)
+        print("PAST DUE:", requirements_due)
+        print("EVENTUALLY DUE:", eventually_due)
 
         return RedirectResponse(
-            f"/settings?stripe_debug=details:{account.details_submitted}-charges:{account.charges_enabled}-payouts:{account.payouts_enabled}",
+            f"/settings?stripe_debug=details:{account.details_submitted}-charges:{account.charges_enabled}-payouts:{account.payouts_enabled}-currently_due:{len(currently_due)}-past_due:{len(requirements_due)}",
             status_code=303
         )
 
