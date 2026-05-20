@@ -3986,12 +3986,14 @@ select option {
     background: rgba(255,255,255,0.18) !important;
     border-color: rgba(255,255,255,0.28) !important;
 }
+
 .public-store-nav-actions {
     display: flex;
     gap: 10px;
     align-items: center;
     flex-wrap: wrap;
 }
+
 .order-tabs {
     display: flex;
     gap: 12px;
@@ -4003,6 +4005,7 @@ select option {
     background: rgba(255,255,255,0.18) !important;
     border-color: rgba(255,255,255,0.28) !important;
 }
+
 .share-row {
     display: flex;
     gap: 10px;
@@ -4014,14 +4017,18 @@ select option {
     flex: 1;
     min-width: 130px;
 }
-.share-row {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin: 16px 0;
+
+.share-icon-btn {
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.10);
+    color: white;
+    border-radius: 999px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 800;
+    backdrop-filter: blur(10px);
 }
 
-.share-row .button {
-    flex: 1;
-    min-width: 130px;
+.share-icon-btn:hover {
+    background: rgba(255,255,255,0.18);
 }

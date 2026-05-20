@@ -783,11 +783,15 @@ def layout(content, title="LaunchFlow"):
             }});
 
             function copyLaunchFlowLink(url) {{
-                navigator.clipboard.writeText(url).then(function () {{
-                    alert("Link copied!");
-                }}).catch(function () {{
+                if (navigator.clipboard) {{
+                    navigator.clipboard.writeText(url).then(function () {{
+                        alert("Link copied!");
+                    }}).catch(function () {{
+                        prompt("Copy this link:", url);
+                    }});
+                }} else {{
                     prompt("Copy this link:", url);
-                }});
+                }}
             }}
 
             function shareLaunchFlowLink(url, title) {{
@@ -2104,6 +2108,8 @@ def discover(request: Request, q: str = "", type: str = "all"):
     product_cards = ""
 
     for item in product_results:
+        product_url = f"{BASE_URL}/product/{item['item_id']}"
+
         product_cards += f"""
         <div class="product-card">
             <div class="product-info">
@@ -2128,6 +2134,14 @@ def discover(request: Request, q: str = "", type: str = "all"):
                     <a class="button small ghost" href="/s/{item["store_slug"]}">
                         View Store
                     </a>
+
+                    <button
+                        type="button"
+                        class="share-icon-btn"
+                        onclick="shareLaunchFlowLink('{product_url}', `{item["name"]}`)"
+                    >
+                        ↗
+                    </button>
                 </div>
             </div>
         </div>
@@ -2137,6 +2151,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
 
     for p in store_results:
         is_owner = bool(user and user["id"] == p["user_id"])
+        store_url = f"{BASE_URL}/s/{p['slug']}"
 
         message_button = ""
 
@@ -2173,6 +2188,14 @@ def discover(request: Request, q: str = "", type: str = "all"):
                     </a>
 
                     {message_button}
+
+                    <button
+                        type="button"
+                        class="share-icon-btn"
+                        onclick="shareLaunchFlowLink('{store_url}', `{p["name"]}`)"
+                    >
+                        ↗
+                    </button>
                 </div>
             </div>
         </div>
@@ -2271,6 +2294,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
         ''' if show_stores else ''}
     </div>
     """, title="Discover")
+
 
 
 # -----------------------------
