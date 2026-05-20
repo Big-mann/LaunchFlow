@@ -4032,3 +4032,14 @@ select option {
 .share-icon-btn:hover {
     background: rgba(255,255,255,0.18);
 }
+.share-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 16px 0;
+}
+
+.share-row .button {
+    flex: 1;
+    min-width: 130px;
+}

@@ -782,27 +782,27 @@ def layout(content, title="LaunchFlow"):
                 }});
             }});
 
-            function copyLaunchFlowLink(url) {{
-                if (navigator.clipboard) {{
-                    navigator.clipboard.writeText(url).then(function () {{
-                        alert("Link copied!");
-                    }}).catch(function () {{
-                        prompt("Copy this link:", url);
-                    }});
+            async function shareLaunchFlowLink(url, title) {{
+                if (navigator.share) {{
+                    try {{
+                        await navigator.share({{
+                            title: title,
+                            url: url
+                        }});
+                    }} catch (e) {{
+                        console.log(e);
+                    }}
                 }} else {{
-                    prompt("Copy this link:", url);
+                    await copyLaunchFlowLink(url);
                 }}
             }}
 
-            function shareLaunchFlowLink(url, title) {{
-                if (navigator.share) {{
-                    navigator.share({{
-                        title: title || "LaunchFlow",
-                        text: "Check this out on LaunchFlow",
-                        url: url
-                    }});
-                }} else {{
-                    copyLaunchFlowLink(url);
+            async function copyLaunchFlowLink(url) {{
+                try {{
+                    await navigator.clipboard.writeText(url);
+                    alert("Link copied!");
+                }} catch (e) {{
+                    prompt("Copy this link:", url);
                 }}
             }}
 
@@ -905,6 +905,7 @@ def layout(content, title="LaunchFlow"):
 
                 searchInput.addEventListener("input", function() {{
                     clearTimeout(chatSearchTimer);
+
                     const value = this.value;
 
                     chatSearchTimer = setTimeout(() => {{
@@ -1015,6 +1016,7 @@ def layout(content, title="LaunchFlow"):
                             Message failed to send.
                         </div>
                     `;
+
                     messages.scrollTop = messages.scrollHeight;
                 }}
 
@@ -1045,6 +1047,7 @@ def layout(content, title="LaunchFlow"):
                 chatWindow.classList.add("open");
 
                 await renderInbox();
+
                 await openExistingConversation(data.conversation_id);
             }}
 
@@ -2108,8 +2111,6 @@ def discover(request: Request, q: str = "", type: str = "all"):
     product_cards = ""
 
     for item in product_results:
-        product_url = f"{BASE_URL}/product/{item['item_id']}"
-
         product_cards += f"""
         <div class="product-card">
             <div class="product-info">
@@ -2137,10 +2138,10 @@ def discover(request: Request, q: str = "", type: str = "all"):
 
                     <button
                         type="button"
-                        class="share-icon-btn"
-                        onclick="shareLaunchFlowLink('{product_url}', `{item["name"]}`)"
+                        class="button small ghost"
+                        onclick="shareLaunchFlowLink('{BASE_URL}/product/{item["item_id"]}', `{item["name"]}`)"
                     >
-                        ↗
+                        Share
                     </button>
                 </div>
             </div>
@@ -2151,7 +2152,6 @@ def discover(request: Request, q: str = "", type: str = "all"):
 
     for p in store_results:
         is_owner = bool(user and user["id"] == p["user_id"])
-        store_url = f"{BASE_URL}/s/{p['slug']}"
 
         message_button = ""
 
@@ -2191,10 +2191,10 @@ def discover(request: Request, q: str = "", type: str = "all"):
 
                     <button
                         type="button"
-                        class="share-icon-btn"
-                        onclick="shareLaunchFlowLink('{store_url}', `{p["name"]}`)"
+                        class="button small ghost"
+                        onclick="shareLaunchFlowLink('{BASE_URL}/s/{p["slug"]}', `{p["name"]}`)"
                     >
-                        ↗
+                        Share
                     </button>
                 </div>
             </div>
@@ -3241,6 +3241,14 @@ def public_store(request: Request, slug: str):
                         {message_button}
 
                         {edit_product_button}
+
+                        <button
+                            type="button"
+                            class="button small ghost"
+                            onclick="shareLaunchFlowLink('{BASE_URL}/product/{item["id"]}', `{item["name"]}`)"
+                        >
+                            Share
+                        </button>
                     </div>
                 </div>
             </div>
@@ -3256,8 +3264,6 @@ def public_store(request: Request, slug: str):
 
     dashboard_link = '<a href="/dashboard">Dashboard</a>' if user else ""
     add_product_link = f'<a href="/stores/{p["slug"]}/add-product">Add Product</a>' if is_owner else ""
-
-    hero_action = ""
 
     if is_owner:
         hero_action = f"""
@@ -3325,6 +3331,14 @@ def public_store(request: Request, slug: str):
 
                 <div class="storefront-hero-actions">
                     {hero_action}
+
+                    <button
+                        type="button"
+                        class="button ghost"
+                        onclick="shareLaunchFlowLink('{BASE_URL}/s/{p["slug"]}', `{p["name"]}`)"
+                    >
+                        Share Store
+                    </button>
                 </div>
             </div>
         </section>
