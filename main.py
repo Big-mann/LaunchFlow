@@ -8,6 +8,8 @@ import random
 import shutil
 
 from typing import List
+from urllib.parse import quote_plus
+
 from dotenv import load_dotenv
 from openai import OpenAI
 from PIL import Image
@@ -38,6 +40,10 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 stripe.api_key = STRIPE_SECRET_KEY
 
 PREMIUM_PRICE = 20
+
+BASE_URL = os.getenv("BASE_URL", "https://launchflow.store")
+
+
 
 VIRAL_PRODUCTS = [
     {
@@ -786,14 +792,17 @@ def layout(content, title="LaunchFlow"):
                 if (navigator.share) {{
                     try {{
                         await navigator.share({{
-                            title: title,
+                            title: title || "LaunchFlow",
                             url: url
                         }});
-                    }} catch (e) {{
-                        console.log(e);
-                    }}
+                    }} catch (err) {{}}
                 }} else {{
-                    await copyLaunchFlowLink(url);
+                    try {{
+                        await navigator.clipboard.writeText(url);
+                        alert("Link copied!");
+                    }} catch (err) {{
+                        prompt("Copy this link:", url);
+                    }}
                 }}
             }}
 
@@ -801,7 +810,7 @@ def layout(content, title="LaunchFlow"):
                 try {{
                     await navigator.clipboard.writeText(url);
                     alert("Link copied!");
-                }} catch (e) {{
+                }} catch (err) {{
                     prompt("Copy this link:", url);
                 }}
             }}
@@ -1047,7 +1056,6 @@ def layout(content, title="LaunchFlow"):
                 chatWindow.classList.add("open");
 
                 await renderInbox();
-
                 await openExistingConversation(data.conversation_id);
             }}
 
@@ -2026,6 +2034,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
         return RedirectResponse("/login", status_code=303)
 
     q_clean = q.strip()
+    q_url = quote_plus(q_clean)
     search = f"%{q_clean}%"
 
     conn = db()
@@ -2139,7 +2148,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
                     <button
                         type="button"
                         class="button small ghost"
-                        onclick="shareLaunchFlowLink('{BASE_URL}/product/{item["item_id"]}', `{item["name"]}`)"
+                        onclick="shareLaunchFlowLink(window.location.origin + '/product/{item["item_id"]}', `{item["name"]}`)"
                     >
                         Share
                     </button>
@@ -2192,7 +2201,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
                     <button
                         type="button"
                         class="button small ghost"
-                        onclick="shareLaunchFlowLink('{BASE_URL}/s/{p["slug"]}', `{p["name"]}`)"
+                        onclick="shareLaunchFlowLink(window.location.origin + '/s/{p["slug"]}', `{p["name"]}`)"
                     >
                         Share
                     </button>
@@ -2249,15 +2258,15 @@ def discover(request: Request, q: str = "", type: str = "all"):
             </form>
 
             <div class="discover-tabs">
-                <a class="button ghost {all_active}" href="/discover?q={q_clean}&type=all">
+                <a class="button ghost {all_active}" href="/discover?q={q_url}&type=all">
                     All
                 </a>
 
-                <a class="button ghost {products_active}" href="/discover?q={q_clean}&type=products">
+                <a class="button ghost {products_active}" href="/discover?q={q_url}&type=products">
                     Products
                 </a>
 
-                <a class="button ghost {stores_active}" href="/discover?q={q_clean}&type=stores">
+                <a class="button ghost {stores_active}" href="/discover?q={q_url}&type=stores">
                     Stores
                 </a>
             </div>
@@ -3245,7 +3254,7 @@ def public_store(request: Request, slug: str):
                         <button
                             type="button"
                             class="button small ghost"
-                            onclick="shareLaunchFlowLink('{BASE_URL}/product/{item["id"]}', `{item["name"]}`)"
+                            onclick="shareLaunchFlowLink(window.location.origin + '/product/{item["id"]}', `{item["name"]}`)"
                         >
                             Share
                         </button>
@@ -3335,7 +3344,7 @@ def public_store(request: Request, slug: str):
                     <button
                         type="button"
                         class="button ghost"
-                        onclick="shareLaunchFlowLink('{BASE_URL}/s/{p["slug"]}', `{p["name"]}`)"
+                        onclick="shareLaunchFlowLink(window.location.origin + '/s/{p["slug"]}', `{p["name"]}`)"
                     >
                         Share Store
                     </button>
