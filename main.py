@@ -5420,9 +5420,46 @@ def settings(request: Request):
 
     pro_status = "Premium" if user["is_pro"] else "Free Plan"
 
+    stripe_onboarding_complete = user["stripe_onboarding_complete"]
+
+    if user["stripe_account_id"]:
+        try:
+            account = stripe.Account.retrieve(user["stripe_account_id"])
+
+            requirements_due = []
+            currently_due = []
+
+            if hasattr(account, "requirements") and account.requirements:
+                requirements_due = account.requirements.past_due or []
+                currently_due = account.requirements.currently_due or []
+
+            stripe_onboarding_complete = bool(
+                account.details_submitted
+                and len(requirements_due) == 0
+                and len(currently_due) == 0
+            )
+
+            conn = db()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                UPDATE users
+                SET stripe_onboarding_complete = ?
+                WHERE id = ?
+                """,
+                (1 if stripe_onboarding_complete else 0, user["id"])
+            )
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            print("SETTINGS STRIPE CHECK ERROR:", e)
+
     stripe_ready = bool(
         user["stripe_account_id"] and
-        user["stripe_onboarding_complete"]
+        stripe_onboarding_complete
     )
 
     if stripe_ready:
