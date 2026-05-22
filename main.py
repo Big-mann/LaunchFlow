@@ -5420,6 +5420,9 @@ def settings(request: Request):
 
     pro_status = "Premium" if user["is_pro"] else "Free Plan"
 
+    print("STRIPE ACCOUNT ID:", user["stripe_account_id"])
+    print("ONBOARDING COMPLETE:", user["stripe_onboarding_complete"])
+
     stripe_onboarding_complete = user["stripe_onboarding_complete"]
 
     if user["stripe_account_id"]:
