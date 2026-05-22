@@ -154,6 +154,8 @@ def init_db():
         cta TEXT DEFAULT 'Buy Now',
         source TEXT DEFAULT 'manual',
         ai_design TEXT DEFAULT '{}',
+        brand_json TEXT DEFAULT '{}',
+        store_layout TEXT DEFAULT 'default',
         published INTEGER DEFAULT 0,
         page_title TEXT DEFAULT '',
         page_subtitle TEXT DEFAULT '',
@@ -253,6 +255,7 @@ def init_db():
         sender_user_id INTEGER DEFAULT 0,
         sender_email TEXT DEFAULT '',
         message TEXT,
+        read_at TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -270,6 +273,8 @@ def init_db():
     add_column_if_missing(cur, "products", "cta", "TEXT DEFAULT 'Buy Now'")
     add_column_if_missing(cur, "products", "source", "TEXT DEFAULT 'manual'")
     add_column_if_missing(cur, "products", "ai_design", "TEXT DEFAULT '{}'")
+    add_column_if_missing(cur, "products", "brand_json", "TEXT DEFAULT '{}'")
+    add_column_if_missing(cur, "products", "store_layout", "TEXT DEFAULT 'default'")
     add_column_if_missing(cur, "products", "published", "INTEGER DEFAULT 0")
     add_column_if_missing(cur, "products", "page_title", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "products", "page_subtitle", "TEXT DEFAULT ''")
