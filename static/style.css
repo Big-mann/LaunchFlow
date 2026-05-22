@@ -4049,3 +4049,361 @@ select option {
     max-height: 120px !important;
     resize: vertical !important;
 }
+.page-manager-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.page-manager-row:last-child {
+    border-bottom: none;
+}
+/* =========================
+   LAUNCHFLOW FINAL OVERRIDES
+========================= */
+
+/* GLOBAL SMOOTHNESS */
+
+* {
+    transition:
+        background 0.18s ease,
+        border-color 0.18s ease,
+        color 0.18s ease,
+        transform 0.18s ease,
+        box-shadow 0.18s ease;
+}
+
+body {
+    overflow-x: hidden;
+}
+
+/* BETTER GLASS */
+
+.panel,
+.store-card,
+.analytics-card,
+.settings-panel,
+.storefront-product-card,
+.public-store-section,
+.product-detail-meta div,
+.product-buy-box,
+.product-detail-note {
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+}
+
+/* BETTER BUTTONS */
+
+.button,
+button,
+.store-actions a,
+.actions a,
+.public-store-nav a,
+.nav-links a {
+    position: relative;
+    overflow: hidden;
+}
+
+.button:hover,
+button:hover,
+.store-actions a:hover,
+.actions a:hover,
+.public-store-nav a:hover,
+.nav-links a:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.24);
+}
+
+.button:active,
+button:active {
+    transform: scale(0.98);
+}
+
+/* CLEANER HEROES */
+
+.storefront-hero,
+.ai-garage-hero,
+.ai-tech-hero,
+.ai-street-hero,
+.ai-beauty-hero,
+.ai-luxury-hero {
+    position: relative;
+    overflow: hidden;
+}
+
+.storefront-hero::before,
+.ai-garage-hero::before,
+.ai-tech-hero::before,
+.ai-street-hero::before,
+.ai-beauty-hero::before,
+.ai-luxury-hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        linear-gradient(
+            135deg,
+            rgba(255,255,255,0.06),
+            transparent 40%
+        );
+    pointer-events: none;
+}
+
+/* PRODUCT CARD UPGRADE */
+
+.storefront-product-card,
+.product-card,
+.garage-product-card {
+    position: relative;
+    overflow: hidden;
+}
+
+.storefront-product-card::after,
+.product-card::after,
+.garage-product-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        linear-gradient(
+            to bottom,
+            transparent,
+            rgba(255,255,255,0.03)
+        );
+    pointer-events: none;
+}
+
+.storefront-product-card:hover,
+.product-card:hover,
+.garage-product-card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 28px 70px rgba(0,0,0,0.30);
+}
+
+/* IMAGE IMPROVEMENTS */
+
+.storefront-product-card img,
+.product-card img,
+.garage-product-card img,
+.product-detail-main-img {
+    transition:
+        transform 0.35s ease,
+        opacity 0.2s ease;
+}
+
+.storefront-product-card:hover img,
+.product-card:hover img,
+.garage-product-card:hover img {
+    transform: scale(1.03);
+}
+
+/* BETTER TEXT HIERARCHY */
+
+h1,
+h2,
+h3 {
+    text-wrap: balance;
+}
+
+p {
+    text-wrap: pretty;
+}
+
+/* AI STORE ENGINE */
+
+.ai-store {
+    isolation: isolate;
+}
+
+.ai-store::before {
+    filter: blur(80px);
+    opacity: 0.9;
+}
+
+/* CLEANER NAVIGATION */
+
+.public-store-nav,
+.top-nav,
+.landing-nav,
+.garage-nav {
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+}
+
+/* HERO STAT CARDS */
+
+.storefront-stats div,
+.store-metrics div,
+.analytics-card,
+.stats div {
+    position: relative;
+    overflow: hidden;
+}
+
+.storefront-stats div::before,
+.store-metrics div::before,
+.analytics-card::before,
+.stats div::before {
+    content: "";
+    position: absolute;
+    top: -40%;
+    right: -20%;
+    width: 140px;
+    height: 140px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.06);
+}
+
+/* CLEANER INPUTS */
+
+input,
+textarea,
+select {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+    outline: none;
+    border-color: rgba(255,255,255,0.35);
+    box-shadow:
+        0 0 0 4px rgba(255,255,255,0.06),
+        0 10px 30px rgba(0,0,0,0.18);
+}
+
+/* CHAT IMPROVEMENTS */
+
+.chat-window {
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+}
+
+.chat-message {
+    animation: chatPop 0.18s ease;
+}
+
+@keyframes chatPop {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* PREMIUM SCROLLBAR */
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255,255,255,0.04);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.18);
+    border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.28);
+}
+
+/* MOBILE IMPROVEMENTS */
+
+@media (max-width: 768px) {
+
+    .storefront-hero,
+    .ai-garage-hero,
+    .ai-tech-hero,
+    .ai-street-hero,
+    .ai-beauty-hero,
+    .ai-luxury-hero {
+        padding: 32px 22px !important;
+    }
+
+    .storefront-product-card,
+    .product-card,
+    .garage-product-card {
+        border-radius: 24px !important;
+    }
+
+    .button,
+    button {
+        width: 100%;
+    }
+
+    .storefront-product-actions,
+    .garage-buttons,
+    .hero-actions {
+        flex-direction: column;
+    }
+}
+
+/* FUTURE-PROOF SPACING */
+
+.section-row,
+.section-header,
+.garage-products-header {
+    margin-bottom: 28px;
+}
+
+/* BETTER DEPTH */
+
+.storefront-product-card,
+.analytics-card,
+.settings-panel,
+.store-card,
+.panel {
+    box-shadow:
+        0 10px 30px rgba(0,0,0,0.16),
+        0 30px 80px rgba(0,0,0,0.18);
+}
+
+/* FIX RANDOM OVERFLOW ISSUES */
+
+img {
+    max-width: 100%;
+}
+
+/* CLEANER EMPTY STATES */
+
+.empty-state,
+.empty,
+.garage-empty {
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+}
+
+/* MODERN FADE-IN */
+
+.storefront-hero,
+.public-store-section,
+.storefront-product-card,
+.analytics-card,
+.store-card,
+.panel {
+    animation: fadeUp 0.4s ease;
+}
+
+@keyframes fadeUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
