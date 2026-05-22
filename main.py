@@ -5733,11 +5733,7 @@ def stripe_connect_return(request: Request):
             currently_due = account.requirements.currently_due or []
             eventually_due = account.requirements.eventually_due or []
 
-        onboarding_complete = (
-            account.details_submitted
-            and len(requirements_due) == 0
-            and len(currently_due) == 0
-        )
+        onboarding_complete = account.details_submitted
 
         cur.execute(
             """
@@ -5775,6 +5771,7 @@ def stripe_connect_return(request: Request):
             f"/settings?stripe_debug=error:{str(e)}",
             status_code=303
         )
+
 
 
 @app.get("/reset-stripe-connect")
