@@ -6,6 +6,7 @@ import json
 import stripe
 import random
 import shutil
+import uuid
 
 from typing import List
 from urllib.parse import quote_plus
@@ -42,6 +43,7 @@ stripe.api_key = STRIPE_SECRET_KEY
 PREMIUM_PRICE = 20
 
 BASE_URL = os.getenv("BASE_URL", "https://launchflow.store")
+
 
 
 
@@ -185,6 +187,7 @@ def init_db():
         store_id INTEGER,
         page_id INTEGER DEFAULT 0,
         section_type TEXT,
+        section_title TEXT DEFAULT '',
         section_data TEXT DEFAULT '{}',
         sort_order INTEGER DEFAULT 0,
         visible INTEGER DEFAULT 1,
@@ -203,6 +206,50 @@ def init_db():
         stock INTEGER,
         image_url TEXT,
         image_urls TEXT DEFAULT '[]',
+        slug TEXT DEFAULT '',
+        featured INTEGER DEFAULT 0,
+        views INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS cart_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT DEFAULT '',
+        user_id INTEGER DEFAULT 0,
+        store_item_id INTEGER,
+        quantity INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS store_likes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        store_id INTEGER,
+        user_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS store_followers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        store_id INTEGER,
+        user_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS store_themes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        creator_id INTEGER,
+        name TEXT,
+        config_json TEXT DEFAULT '{}',
+        preview_image TEXT DEFAULT '',
+        public INTEGER DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -292,11 +339,32 @@ def init_db():
     add_column_if_missing(cur, "store_sections", "store_id", "INTEGER")
     add_column_if_missing(cur, "store_sections", "page_id", "INTEGER DEFAULT 0")
     add_column_if_missing(cur, "store_sections", "section_type", "TEXT")
+    add_column_if_missing(cur, "store_sections", "section_title", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "store_sections", "section_data", "TEXT DEFAULT '{}'")
     add_column_if_missing(cur, "store_sections", "sort_order", "INTEGER DEFAULT 0")
     add_column_if_missing(cur, "store_sections", "visible", "INTEGER DEFAULT 1")
 
     add_column_if_missing(cur, "store_items", "image_urls", "TEXT DEFAULT '[]'")
+    add_column_if_missing(cur, "store_items", "slug", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "store_items", "featured", "INTEGER DEFAULT 0")
+    add_column_if_missing(cur, "store_items", "views", "INTEGER DEFAULT 0")
+
+    add_column_if_missing(cur, "cart_items", "session_id", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "cart_items", "user_id", "INTEGER DEFAULT 0")
+    add_column_if_missing(cur, "cart_items", "store_item_id", "INTEGER")
+    add_column_if_missing(cur, "cart_items", "quantity", "INTEGER DEFAULT 1")
+
+    add_column_if_missing(cur, "store_likes", "store_id", "INTEGER")
+    add_column_if_missing(cur, "store_likes", "user_id", "INTEGER")
+
+    add_column_if_missing(cur, "store_followers", "store_id", "INTEGER")
+    add_column_if_missing(cur, "store_followers", "user_id", "INTEGER")
+
+    add_column_if_missing(cur, "store_themes", "creator_id", "INTEGER")
+    add_column_if_missing(cur, "store_themes", "name", "TEXT")
+    add_column_if_missing(cur, "store_themes", "config_json", "TEXT DEFAULT '{}'")
+    add_column_if_missing(cur, "store_themes", "preview_image", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "store_themes", "public", "INTEGER DEFAULT 1")
 
     add_column_if_missing(cur, "orders", "store_item_id", "INTEGER")
     add_column_if_missing(cur, "orders", "stripe_session_id", "TEXT DEFAULT ''")
@@ -1182,6 +1250,7 @@ def layout(content, title="LaunchFlow"):
 
 
 def top_nav(user):
+
     if user["is_pro"] == 1:
         premium_button = """
         <a href="/manage-subscription" class="premium-pill premium-active">
@@ -1195,7 +1264,10 @@ def top_nav(user):
         </a>
         """
 
-    stripe_ready = bool(user["stripe_account_id"] and user["stripe_onboarding_complete"])
+    stripe_ready = bool(
+        user["stripe_account_id"]
+        and user["stripe_onboarding_complete"]
+    )
 
     stripe_badge = """
     <a href="/settings" class="nav-status ready">
@@ -1207,26 +1279,80 @@ def top_nav(user):
     </a>
     """
 
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT COUNT(*) as count
+    FROM cart_items
+    WHERE user_id = ?
+    """, (user["id"],))
+
+    cart_count = cur.fetchone()["count"]
+
+    conn.close()
+
+    cart_badge = ""
+
+    if cart_count > 0:
+        cart_badge = f"""
+        <span class="cart-count-badge">
+            {cart_count}
+        </span>
+        """
+
     return f"""
     <nav class="top-nav">
+
         <div class="nav-left">
-            <a class="brand" href="/dashboard">LaunchFlow</a>
+            <a class="brand" href="/dashboard">
+                LaunchFlow
+            </a>
         </div>
 
         <div class="nav-links">
             <a href="/dashboard">Dashboard</a>
-            <a href="/discover">Discover</a>
-            <a href="/ai-builder">AI Builder</a>
-            <a href="/viral-products">Viral Products</a>
-            <a href="/analytics">Analytics</a>
-            <a href="/orders">Orders</a>
-            <a href="/settings">Settings</a>
-            <a href="/dashboard#stores">My Stores</a>
+
+            <a href="/discover">
+                Discover
+            </a>
+
+            <a href="/ai-builder">
+                AI Builder
+            </a>
+
+            <a href="/viral-products">
+                Viral Products
+            </a>
+
+            <a href="/analytics">
+                Analytics
+            </a>
+
+            <a href="/orders">
+                Orders
+            </a>
+
+            <a href="/cart" class="cart-nav-link">
+                Cart
+                {cart_badge}
+            </a>
+
+            <a href="/settings">
+                Settings
+            </a>
+
+            <a href="/dashboard#stores">
+                My Stores
+            </a>
 
             {stripe_badge}
+
             {premium_button}
 
-            <a href="/logout">Log out</a>
+            <a href="/logout">
+                Log out
+            </a>
         </div>
     </nav>
     """
@@ -1826,6 +1952,13 @@ def dashboard(request: Request):
     """, (user["id"],))
     views = cur.fetchone()["views"]
 
+    cur.execute("""
+    SELECT COUNT(*) as count
+    FROM cart_items
+    WHERE user_id = ?
+    """, (user["id"],))
+    cart_count = cur.fetchone()["count"]
+
     conn.close()
 
     cards = ""
@@ -1871,6 +2004,7 @@ def dashboard(request: Request):
             <div class="store-actions">
                 <a class="button small ghost" href="/s/{p["slug"]}">View Store</a>
                 <a class="button small ghost" href="/stores/{p["slug"]}/add-product">Add Product</a>
+                <a class="button small ghost" href="/stores/{p["slug"]}/pages">Manage Pages</a>
                 <a class="button small ghost" href="/edit/{p["id"]}">Edit</a>
 
                 <button
@@ -1970,6 +2104,10 @@ def dashboard(request: Request):
                     <a class="button ghost" href="/ai-builder">
                         AI Builder
                     </a>
+
+                    <a class="button ghost" href="/cart">
+                        Cart
+                    </a>
                 </div>
             </div>
         </section>
@@ -1993,6 +2131,11 @@ def dashboard(request: Request):
             <div>
                 <h3>${money(revenue)}</h3>
                 <p>Total Revenue</p>
+            </div>
+
+            <div>
+                <h3>{cart_count}</h3>
+                <p>Cart Items</p>
             </div>
         </section>
 
@@ -2883,6 +3026,7 @@ def save_store_product(
             continue
 
     main_image = uploaded_paths[0] if uploaded_paths else ""
+    product_slug = slugify(name) or f"product-{random.randint(1000, 9999)}"
 
     cur.execute("""
     INSERT INTO store_items (
@@ -2893,9 +3037,12 @@ def save_store_product(
         price,
         stock,
         image_url,
-        image_urls
+        image_urls,
+        slug,
+        featured,
+        views
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
     """, (
         store["id"],
         user["id"],
@@ -2904,7 +3051,8 @@ def save_store_product(
         clean_price(price),
         clean_stock(stock),
         main_image,
-        json.dumps(uploaded_paths)
+        json.dumps(uploaded_paths),
+        product_slug
     ))
 
     conn.commit()
@@ -3406,6 +3554,10 @@ def manage_store_pages(request: Request, slug: str):
             <h1>Manage pages</h1>
             <p class="muted">Add About, FAQ, Contact, and custom pages to your storefront.</p>
 
+            <a class="button ghost" href="/stores/{store["slug"]}/sections">
+                Manage Homepage Sections
+            </a>
+
             <form action="/stores/{store["slug"]}/pages" method="post">
                 <label>Page title</label>
                 <input name="title" placeholder="Example: Shipping Info" required>
@@ -3672,6 +3824,351 @@ def public_store_page(request: Request, slug: str, page_slug: str):
     </div>
     """, title=f"{page['title']} - {store['name']}")
 
+@app.get("/stores/{slug}/sections", response_class=HTMLResponse)
+def manage_store_sections(request: Request, slug: str):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT * FROM products WHERE slug = ? AND user_id = ?",
+        (slug, user["id"])
+    )
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute("""
+    SELECT *
+    FROM store_sections
+    WHERE store_id = ?
+    ORDER BY sort_order ASC, id ASC
+    """, (store["id"],))
+
+    sections = cur.fetchall()
+    conn.close()
+
+    rows = ""
+
+    for section in sections:
+        rows += f"""
+        <div class="page-manager-row">
+            <div>
+                <strong>{section["section_type"].replace("-", " ").title()}</strong>
+                <p class="muted">Sort order: {section["sort_order"]} · {"Visible" if section["visible"] else "Hidden"}</p>
+            </div>
+
+            <div class="actions">
+                <form action="/stores/{store["slug"]}/sections/{section["id"]}/move-up" method="post">
+                    <button type="submit" class="button small ghost">
+                        ↑
+                    </button>
+                </form>
+
+                <form action="/stores/{store["slug"]}/sections/{section["id"]}/move-down" method="post">
+                    <button type="submit" class="button small ghost">
+                        ↓
+                    </button>
+                </form>
+
+                <a class="button small ghost" href="/stores/{store["slug"]}/sections/{section["id"]}/edit">
+                    Edit
+                </a>
+
+                <form action="/stores/{store["slug"]}/sections/{section["id"]}/toggle" method="post">
+                    <button type="submit" class="button small ghost">
+                        {"Hide" if section["visible"] else "Show"}
+                    </button>
+                </form>
+            </div>
+        </div>
+        """
+
+    if not rows:
+        rows = "<p class='muted'>No homepage sections yet.</p>"
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+
+        <a class="back" href="/stores/{store["slug"]}/pages">
+            ← Manage Pages
+        </a>
+
+        <div class="panel">
+            <p class="eyebrow">Homepage Sections</p>
+            <h1>Manage sections</h1>
+            <p class="muted">Edit AI-generated homepage sections like hero, benefits, FAQ, and trust blocks.</p>
+
+            <div class="hero-actions">
+                <a class="button ghost" href="/s/{store["slug"]}">
+                    Preview Store
+                </a>
+
+                <a class="button ghost" href="/stores/{store["slug"]}/pages">
+                    Manage Pages
+                </a>
+            </div>
+        </div>
+
+        <div class="panel">
+            {rows}
+        </div>
+    </div>
+    """, title="Manage Sections")
+
+
+@app.get("/stores/{slug}/sections/{section_id}/edit", response_class=HTMLResponse)
+def edit_store_section(request: Request, slug: str, section_id: int):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT * FROM products WHERE slug = ? AND user_id = ?",
+        (slug, user["id"])
+    )
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute(
+        "SELECT * FROM store_sections WHERE id = ? AND store_id = ?",
+        (section_id, store["id"])
+    )
+    section = cur.fetchone()
+    conn.close()
+
+    if not section:
+        return RedirectResponse(f"/stores/{slug}/sections", status_code=303)
+
+    try:
+        data = json.loads(section["section_data"] or "{}")
+    except Exception:
+        data = {}
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+
+        <a class="back" href="/stores/{slug}/sections">
+            ← Manage Sections
+        </a>
+
+        <div class="panel">
+            <p class="eyebrow">Edit Section</p>
+            <h1>{section["section_type"].replace("-", " ").title()}</h1>
+
+            <form action="/stores/{slug}/sections/{section_id}/edit" method="post">
+                <label>Section title</label>
+                <input name="section_title" value="{data.get("title", section["section_type"].replace("-", " ").title())}">
+
+                <label>Headline</label>
+                <input name="headline" value="{data.get("headline", "")}">
+
+                <label>Subheadline</label>
+                <input name="subheadline" value="{data.get("subheadline", "")}">
+
+                <label>Description</label>
+                <textarea name="description">{data.get("description", "")}</textarea>
+
+                <label>Items</label>
+                <textarea name="items" placeholder="One item per line">{chr(10).join(data.get("items", [])) if isinstance(data.get("items", []), list) else ""}</textarea>
+
+                <button type="submit">Save Section</button>
+            </form>
+        </div>
+    </div>
+    """, title="Edit Section")
+
+
+@app.post("/stores/{slug}/sections/{section_id}/edit")
+def save_store_section(
+    request: Request,
+    slug: str,
+    section_id: int,
+    section_title: str = Form(""),
+    headline: str = Form(""),
+    subheadline: str = Form(""),
+    description: str = Form(""),
+    items: str = Form("")
+):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    item_list = [
+        line.strip()
+        for line in items.splitlines()
+        if line.strip()
+    ]
+
+    section_data = {
+        "title": section_title.strip(),
+        "headline": headline.strip(),
+        "subheadline": subheadline.strip(),
+        "description": description.strip(),
+        "items": item_list
+    }
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT * FROM products WHERE slug = ? AND user_id = ?",
+        (slug, user["id"])
+    )
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute("""
+    UPDATE store_sections
+    SET section_data = ?
+    WHERE id = ?
+    AND store_id = ?
+    """, (
+        json.dumps(section_data),
+        section_id,
+        store["id"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(f"/stores/{slug}/sections", status_code=303)
+
+
+@app.post("/stores/{slug}/sections/{section_id}/toggle")
+def toggle_store_section(request: Request, slug: str, section_id: int):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT * FROM products WHERE slug = ? AND user_id = ?",
+        (slug, user["id"])
+    )
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute("""
+    UPDATE store_sections
+    SET visible = CASE WHEN visible = 1 THEN 0 ELSE 1 END
+    WHERE id = ?
+    AND store_id = ?
+    """, (
+        section_id,
+        store["id"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(f"/stores/{slug}/sections", status_code=303)
+
+
+@app.post("/stores/{slug}/sections/{section_id}/move-up")
+def move_section_up(request: Request, slug: str, section_id: int):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT * FROM products WHERE slug = ? AND user_id = ?",
+        (slug, user["id"])
+    )
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute(
+        "SELECT * FROM store_sections WHERE id = ? AND store_id = ?",
+        (section_id, store["id"])
+    )
+    section = cur.fetchone()
+
+    if section:
+        new_order = max(0, (section["sort_order"] or 0) - 1)
+
+        cur.execute(
+            "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
+            (new_order, section_id, store["id"])
+        )
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(f"/stores/{slug}/sections", status_code=303)
+
+
+@app.post("/stores/{slug}/sections/{section_id}/move-down")
+def move_section_down(request: Request, slug: str, section_id: int):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT * FROM products WHERE slug = ? AND user_id = ?",
+        (slug, user["id"])
+    )
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute(
+        "SELECT * FROM store_sections WHERE id = ? AND store_id = ?",
+        (section_id, store["id"])
+    )
+    section = cur.fetchone()
+
+    if section:
+        new_order = (section["sort_order"] or 0) + 1
+
+        cur.execute(
+            "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
+            (new_order, section_id, store["id"])
+        )
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(f"/stores/{slug}/sections", status_code=303)
+
 
 @app.get("/upgrade", response_class=HTMLResponse)
 def upgrade_page(request: Request, reason: str = ""):
@@ -3825,6 +4322,36 @@ def public_store(request: Request, slug: str):
         ["Premium storefront", "Ready to sell", "Secure checkout"]
     )
 
+    hero_section_data = {}
+
+    for section in store_sections:
+        if section["section_type"] == "hero":
+            try:
+                hero_section_data = json.loads(section["section_data"] or "{}")
+            except Exception:
+                hero_section_data = {}
+            break
+
+    hero_headline = (
+        hero_section_data.get("headline")
+        or ai_design.get("hero_headline")
+        or p["name"]
+    )
+
+    hero_subheadline = (
+        hero_section_data.get("subheadline")
+        or p["tagline"]
+        or ai_design.get("hero_subheadline")
+        or ""
+    )
+
+    hero_description = (
+        hero_section_data.get("description")
+        or p["description"]
+        or ai_design.get("homepage_copy")
+        or ""
+    )
+
     badge_html = ""
 
     for badge in trust_badges[:3]:
@@ -3844,6 +4371,9 @@ def public_store(request: Request, slug: str):
             section_data = {}
 
         section_type = section["section_type"]
+
+        if section_type in ["hero", "featured-products"]:
+            continue
 
         if section_type == "benefits":
             items = section_data.get("items", trust_badges)
@@ -3872,7 +4402,7 @@ def public_store(request: Request, slug: str):
             <section class="public-store-section ai-brand-section">
                 <p class="eyebrow">FAQ</p>
                 <h2>{section_data.get("title", "Frequently Asked Questions")}</h2>
-                <p>Questions about products, shipping, and support can be handled through LaunchFlow messages.</p>
+                <p>{section_data.get("description", "Questions about products, shipping, and support can be handled through LaunchFlow messages.")}</p>
             </section>
             """
 
@@ -4042,11 +4572,11 @@ def public_store(request: Request, slug: str):
             <div class="storefront-hero-content">
                 <p class="eyebrow">Storefront</p>
 
-                <h1>{ai_design.get("hero_headline", p["name"])}</h1>
+                <h1>{hero_headline}</h1>
 
-                <h2>{p["tagline"] or ai_design.get("hero_subheadline", "")}</h2>
+                <h2>{hero_subheadline}</h2>
 
-                <p>{p["description"]}</p>
+                <p>{hero_description}</p>
 
                 <div class="storefront-stats ai-trust-row">
                     {badge_html}
@@ -4095,6 +4625,10 @@ def public_store(request: Request, slug: str):
 
                 <a class="button ghost" href="/stores/{p["slug"]}/pages">
                     Manage Pages
+                </a>
+
+                <a class="button ghost" href="/stores/{p["slug"]}/sections">
+                    Manage Sections
                 </a>
             </div>
             ''' if is_owner else ''}
@@ -4215,11 +4749,7 @@ def product_detail(request: Request, item_id: int):
     if not image_list and item["image_url"]:
         image_list = [item["image_url"]]
 
-    main_image = (
-        image_list[0]
-        if image_list
-        else "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=900&q=80"
-    )
+    main_image = image_list[0] if image_list else "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=900&q=80"
 
     gallery_html = ""
 
@@ -4233,19 +4763,14 @@ def product_detail(request: Request, item_id: int):
         """
 
     user = require_user(request)
-
-    is_owner = bool(
-        user and user["id"] == item["user_id"]
-    )
+    is_owner = bool(user and user["id"] == item["user_id"])
 
     owner_buttons = ""
 
     if is_owner:
         owner_buttons = f"""
         <div class="product-owner-actions">
-            <a href="/product/{item["id"]}/edit" class="button">
-                Edit Product
-            </a>
+            <a href="/product/{item["id"]}/edit" class="button">Edit Product</a>
 
             <form
                 action="/product/{item["id"]}/delete"
@@ -4380,6 +4905,16 @@ def product_detail(request: Request, item_id: int):
                     <button type="submit" {buy_disabled}>
                         {"Sold Out" if item["stock"] <= 0 else "Buy Now"}
                     </button>
+
+                    <button
+                        type="submit"
+                        formaction="/cart/add/{item["id"]}"
+                        class="button ghost"
+                        formnovalidate
+                        {buy_disabled}
+                    >
+                        Add to Cart
+                    </button>
                 </form>
 
                 <div class="product-detail-note">
@@ -4397,530 +4932,76 @@ def product_detail(request: Request, item_id: int):
     """
 
     return layout(html, title=item["name"])
-
-
-@app.get("/product/{item_id}/edit", response_class=HTMLResponse)
-def edit_product_page(request: Request, item_id: int):
-    user = require_user(request)
-
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-    SELECT
-        store_items.*,
-        products.slug as store_slug,
-        products.name as store_name
-    FROM store_items
-    JOIN products ON store_items.store_id = products.id
-    WHERE store_items.id = ?
-    AND store_items.user_id = ?
-    """, (item_id, user["id"]))
-
-    item = cur.fetchone()
-    conn.close()
-
-    if not item:
-        return RedirectResponse("/dashboard", status_code=303)
-
-    return layout(f"""
-    <div class="container narrow">
-        {top_nav(user)}
-
-        <a class="back" href="/s/{item["store_slug"]}#products">
-            ← Back to Store
-        </a>
-
-        <div class="panel">
-            <p class="eyebrow">Edit product</p>
-            <h1>Edit {item["name"]}</h1>
-
-            <form
-                action="/product/{item["id"]}/edit"
-                method="post"
-                enctype="multipart/form-data"
-            >
-                <label>Product Name</label>
-                <input name="name" value="{item["name"]}" required>
-
-                <label>Product Description</label>
-                <textarea name="description" required>{item["description"]}</textarea>
-
-                <label>Price</label>
-                <input name="price" class="money-input" value="${money(item["price"])}" required>
-
-                <label>Stock</label>
-                <input name="stock" value="{item["stock"]}" required>
-
-                <label>Replace Product Photos</label>
-
-                <label class="upload-box" for="edit-product-images">
-                    <input
-                        id="edit-product-images"
-                        name="images"
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        style="display:none;"
-                    >
-
-                    <strong>📸 Add Product Photos</strong>
-
-                    <p>
-                        Click this box to upload new photos.<br>
-                        Upload one or multiple images. Max 10 photos.
-                    </p>
-                </label>
-
-                <p class="muted">
-                    If you upload new photos, the first one becomes the main image.
-                </p>
-
-                <button type="submit">
-                    Save Changes
-                </button>
-            </form>
-        </div>
-    </div>
-    """, title=f"Edit {item['name']}")
-
-
-@app.post("/product/{item_id}/edit")
-def save_product_edit(
+@app.post("/cart/add/{item_id}")
+def add_to_cart(
     request: Request,
     item_id: int,
-    name: str = Form(...),
-    description: str = Form(""),
-    price: str = Form("0"),
-    stock: str = Form("0"),
-    images: List[UploadFile] = File(default=[])
+    quantity: int = Form(1)
 ):
     user = require_user(request)
-
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-    SELECT store_items.*, products.slug as store_slug
-    FROM store_items
-    JOIN products ON store_items.store_id = products.id
-    WHERE store_items.id = ? AND store_items.user_id = ?
-    """, (item_id, user["id"]))
-
-    item = cur.fetchone()
-
-    if not item:
-        conn.close()
-        return RedirectResponse("/dashboard", status_code=303)
-
-    uploaded_paths = []
-
-    for image in images[:10]:
-        if not image or not image.filename:
-            continue
-
-        file_ext = os.path.splitext(image.filename)[1].lower()
-
-        if file_ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"]:
-            continue
-
-        safe_base = slugify(os.path.splitext(image.filename)[0]) or "product-image"
-
-        try:
-            img = Image.open(image.file)
-
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-
-            safe_name = f"{random.randint(100000, 999999)}-{safe_base}.jpg"
-            file_path = os.path.join(UPLOAD_DIR, safe_name)
-
-            img.save(file_path, "JPEG", quality=95)
-
-            uploaded_paths.append(f"/static/uploads/{safe_name}")
-
-        except Exception as e:
-            print("IMAGE UPDATE ERROR:", e)
-            continue
-
-    if uploaded_paths:
-        main_image = uploaded_paths[0]
-        image_urls = json.dumps(uploaded_paths)
-
-        cur.execute("""
-        UPDATE store_items
-        SET name = ?,
-            description = ?,
-            price = ?,
-            stock = ?,
-            image_url = ?,
-            image_urls = ?
-        WHERE id = ? AND user_id = ?
-        """, (
-            name,
-            description,
-            clean_price(price),
-            clean_stock(stock),
-            main_image,
-            image_urls,
-            item_id,
-            user["id"]
-        ))
-
-    else:
-        cur.execute("""
-        UPDATE store_items
-        SET name = ?,
-            description = ?,
-            price = ?,
-            stock = ?
-        WHERE id = ? AND user_id = ?
-        """, (
-            name,
-            description,
-            clean_price(price),
-            clean_stock(stock),
-            item_id,
-            user["id"]
-        ))
-
-    conn.commit()
-    store_slug = item["store_slug"]
-    conn.close()
-
-    return RedirectResponse(f"/s/{store_slug}#products", status_code=303)
-
-
-@app.post("/checkout-item/{item_id}")
-def checkout_item(
-    item_id: int,
-    customer_email: str = Form(...),
-    customer_name: str = Form(""),
-    quantity: int = Form(1),
-    shipping_name: str = Form(""),
-    shipping_address_line1: str = Form(""),
-    shipping_address_line2: str = Form(""),
-    shipping_city: str = Form(""),
-    shipping_state: str = Form(""),
-    shipping_postal_code: str = Form(""),
-    shipping_country: str = Form("US"),
-    buyer_message: str = Form("")
-):
 
     quantity = max(1, int(quantity))
 
+    session_id = request.cookies.get("launchflow_cart_id")
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
     conn = db()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT * FROM store_items WHERE id = ?",
-        (item_id,)
-    )
-
+    cur.execute("SELECT * FROM store_items WHERE id = ?", (item_id,))
     item = cur.fetchone()
 
     if not item:
         conn.close()
         return RedirectResponse("/", status_code=303)
 
-    if item["stock"] <= 0:
-        conn.close()
-        return RedirectResponse(f"/product/{item_id}", status_code=303)
-
-    if quantity > item["stock"]:
-        conn.close()
-
-        return layout(f"""
-        <div class="container narrow center">
-            <div class="panel">
-                <h1>Not enough stock</h1>
-                <p>Only {item["stock"]} left in stock.</p>
-                <a class="button" href="/product/{item_id}">Back to product</a>
-            </div>
-        </div>
-        """)
-
-    cur.execute(
-        "SELECT * FROM users WHERE id = ?",
-        (item["user_id"],)
+    cur.execute("""
+    SELECT *
+    FROM cart_items
+    WHERE store_item_id = ?
+    AND (
+        session_id = ?
+        OR user_id = ?
     )
+    """, (
+        item_id,
+        session_id,
+        user["id"] if user else 0
+    ))
 
-    seller = cur.fetchone()
+    existing = cur.fetchone()
 
-    if (
-        not seller
-        or not seller["stripe_account_id"]
-        or not seller["stripe_onboarding_complete"]
-    ):
-        conn.close()
-
-        return layout("""
-        <div class="container narrow center">
-            <div class="panel">
-                <h1>Seller payments not ready</h1>
-                <p>This seller has not finished Stripe setup yet.</p>
-                <a class="button" href="/">Back home</a>
-            </div>
-        </div>
-        """)
-
-    amount_cents = int(float(item["price"]) * 100)
-    total_cents = amount_cents * quantity
-    platform_fee = int(total_cents * 0.10)
-
-    conn.close()
-
-    base_url = os.getenv("BASE_URL", BASE_URL)
-
-    checkout_session = stripe.checkout.Session.create(
-        payment_method_types=["card"],
-        mode="payment",
-        customer_email=customer_email,
-
-        line_items=[
-            {
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {
-                        "name": item["name"],
-                        "description": item["description"],
-                    },
-                    "unit_amount": amount_cents,
-                },
-                "quantity": quantity,
-            }
-        ],
-
-        payment_intent_data={
-            "application_fee_amount": platform_fee,
-            "transfer_data": {
-                "destination": seller["stripe_account_id"],
-            },
-        },
-
-        metadata={
-            "store_item_id": str(item["id"]),
-            "store_id": str(item["store_id"]),
-            "seller_id": str(item["user_id"]),
-
-            "customer_email": customer_email,
-            "customer_name": customer_name,
-
-            "quantity": str(quantity),
-
-            "shipping_name": shipping_name,
-            "shipping_address_line1": shipping_address_line1,
-            "shipping_address_line2": shipping_address_line2,
-            "shipping_city": shipping_city,
-            "shipping_state": shipping_state,
-            "shipping_postal_code": shipping_postal_code,
-            "shipping_country": shipping_country,
-
-            "buyer_message": buyer_message,
-        },
-
-        success_url=f"{base_url}/success-item/{item_id}?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{base_url}/product/{item_id}",
-    )
-
-    return RedirectResponse(
-        checkout_session.url,
-        status_code=303
-    )
-
-
-@app.get("/success-item/{item_id}", response_class=HTMLResponse)
-def success_item(item_id: int, session_id: str = ""):
-
-    if not session_id:
-        return RedirectResponse(
-            f"/product/{item_id}",
-            status_code=303
-        )
-
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-
-        if (
-            session.status != "complete"
-            or session.payment_status != "paid"
-        ):
-            return RedirectResponse(
-                f"/product/{item_id}",
-                status_code=303
-            )
-
-    except Exception as e:
-        print("Product checkout success error:", e)
-
-        return RedirectResponse(
-            f"/product/{item_id}",
-            status_code=303
-        )
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT * FROM store_items WHERE id = ?",
-        (item_id,)
-    )
-
-    item = cur.fetchone()
-
-    if not item:
-        conn.close()
-
-        return layout("""
-        <div class="container">
-            <h1>Product not found</h1>
-        </div>
-        """)
-
-    cur.execute(
-        "SELECT * FROM orders WHERE stripe_session_id = ?",
-        (session_id,)
-    )
-
-    existing_order = cur.fetchone()
-
-    order_id = None
-
-    if existing_order:
-        order_id = existing_order["id"]
-
-    else:
-        quantity = int(
-            session.metadata.get("quantity", "1")
-        )
-
-        if item["stock"] < quantity:
-            conn.close()
-
-            return layout("""
-            <div class="container narrow center">
-                <div class="panel">
-                    <h1>Stock issue</h1>
-                    <p>
-                        This order was paid, but there is not enough stock left.
-                    </p>
-                    <a class="button" href="/">Back home</a>
-                </div>
-            </div>
-            """)
-
-        customer_email = session.metadata.get("customer_email", "")
-        customer_name = session.metadata.get("customer_name", "")
-
-        total_amount = float(item["price"]) * quantity
-
+    if existing:
         cur.execute("""
-        INSERT INTO orders (
-            product_id,
-            store_item_id,
-            amount,
-
-            customer_email,
-            customer_name,
-
-            quantity,
-
-            shipping_name,
-            shipping_address_line1,
-            shipping_address_line2,
-            shipping_city,
-            shipping_state,
-            shipping_postal_code,
-            shipping_country,
-
-            stripe_session_id,
-
-            payment_status,
-
-            shipping_status,
-
-            fulfillment_status,
-
-            buyer_message
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            item["store_id"],
-            item["id"],
-
-            total_amount,
-
-            customer_email,
-            customer_name,
-
-            quantity,
-
-            session.metadata.get("shipping_name", ""),
-            session.metadata.get("shipping_address_line1", ""),
-            session.metadata.get("shipping_address_line2", ""),
-            session.metadata.get("shipping_city", ""),
-            session.metadata.get("shipping_state", ""),
-            session.metadata.get("shipping_postal_code", ""),
-            session.metadata.get("shipping_country", ""),
-
+        UPDATE cart_items
+        SET quantity = quantity + ?
+        WHERE id = ?
+        """, (quantity, existing["id"]))
+    else:
+        cur.execute("""
+        INSERT INTO cart_items (
             session_id,
-
-            "paid",
-
-            "Not shipped yet",
-
-            "New order",
-
-            session.metadata.get("buyer_message", "")
+            user_id,
+            store_item_id,
+            quantity
+        )
+        VALUES (?, ?, ?, ?)
+        """, (
+            session_id,
+            user["id"] if user else 0,
+            item_id,
+            quantity
         ))
 
-        order_id = cur.lastrowid
-
-        cur.execute(
-            """
-            UPDATE store_items
-            SET stock = stock - ?
-            WHERE id = ?
-            AND stock >= ?
-            """,
-            (quantity, item_id, quantity)
-        )
-
-        conn.commit()
-
+    conn.commit()
     conn.close()
 
-    return layout(f"""
-    <div class="container narrow center">
-        <div class="panel success-panel">
-            <h1>Payment successful 🎉</h1>
+    response = RedirectResponse("/cart", status_code=303)
+    response.set_cookie("launchflow_cart_id", session_id, max_age=60 * 60 * 24 * 30)
 
-            <p>Your order has been confirmed.</p>
-
-            <p class="muted">
-                Order ID:
-                <strong>{order_id}</strong>
-            </p>
-
-            <div class="success-actions">
-                <a class="button" href="/track-order/{order_id}">
-                    Track your order
-                </a>
-
-                <a class="button ghost" href="/">
-                    Back home
-                </a>
-            </div>
-        </div>
-    </div>
-    """)
-
+    return response
 
 # -----------------------------
 # EDIT / DELETE

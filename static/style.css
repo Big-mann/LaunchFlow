@@ -4407,3 +4407,24 @@ img {
         transform: translateY(0);
     }
 }
+.cart-nav-link{
+    position:relative;
+    display:flex;
+    align-items:center;
+    gap:8px;
+}
+
+.cart-count-badge{
+    min-width:20px;
+    height:20px;
+    padding:0 6px;
+    border-radius:999px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:#7c3aed;
+    color:white;
+    font-size:12px;
+    font-weight:700;
+    line-height:1;
+}
