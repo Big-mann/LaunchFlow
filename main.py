@@ -1253,7 +1253,7 @@ def top_nav(user):
 
     if user["is_pro"] == 1:
         premium_button = """
-        <a href="/manage-subscription" class="premium-pill premium-active">
+        <a href="/settings" class="premium-pill premium-active">
             Premium
         </a>
         """
@@ -6675,4 +6675,126 @@ def refund_page():
 
     </div>
     """, title="Refund Policy")
+@app.get("/cart", response_class=HTMLResponse)
+def cart_page(request: Request):
+    user = require_user(request)
+
+    session_id = request.cookies.get("launchflow_cart_id", "")
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT
+        cart_items.*,
+        store_items.name,
+        store_items.price,
+        store_items.stock,
+        store_items.image_url,
+        products.slug as store_slug,
+        products.name as store_name
+    FROM cart_items
+    JOIN store_items ON cart_items.store_item_id = store_items.id
+    JOIN products ON store_items.store_id = products.id
+    WHERE cart_items.session_id = ?
+    OR cart_items.user_id = ?
+    ORDER BY cart_items.id DESC
+    """, (
+        session_id,
+        user["id"] if user else 0
+    ))
+
+    cart_items_data = cur.fetchall()
+    conn.close()
+
+    rows = ""
+    total = 0
+
+    for item in cart_items_data:
+        line_total = float(item["price"]) * int(item["quantity"])
+        total += line_total
+
+        rows += f"""
+        <div class="page-manager-row">
+            <div>
+                <strong>{item["name"]}</strong>
+                <p class="muted">{item["store_name"]} · Qty: {item["quantity"]}</p>
+            </div>
+
+            <div class="actions">
+                <strong>${money(line_total)}</strong>
+
+                <a class="button small ghost" href="/product/{item["store_item_id"]}">
+                    View
+                </a>
+
+                <form action="/cart/remove/{item["id"]}" method="post">
+                    <button class="button small ghost" type="submit">
+                        Remove
+                    </button>
+                </form>
+            </div>
+        </div>
+        """
+
+    if not rows:
+        rows = """
+        <div class="empty-state">
+            <h2>Your cart is empty</h2>
+            <p>Add products from stores to see them here.</p>
+            <a class="button" href="/discover">Discover Products</a>
+        </div>
+        """
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user) if user else ""}
+
+        <a class="back" href="/discover">
+            ← Discover
+        </a>
+
+        <div class="panel">
+            <p class="eyebrow">Cart</p>
+            <h1>Your cart</h1>
+            <p class="muted">Review saved products before buying.</p>
+        </div>
+
+        <div class="panel">
+            {rows}
+
+            <div class="section-header compact">
+                <div>
+                    <p class="eyebrow">Total</p>
+                    <h2>${money(total)}</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+    """, title="Cart")
+@app.post("/cart/remove/{cart_item_id}")
+def remove_cart_item(request: Request, cart_item_id: int):
+    user = require_user(request)
+    session_id = request.cookies.get("launchflow_cart_id", "")
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    DELETE FROM cart_items
+    WHERE id = ?
+    AND (
+        session_id = ?
+        OR user_id = ?
+    )
+    """, (
+        cart_item_id,
+        session_id,
+        user["id"] if user else 0
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse("/cart", status_code=303)
 
