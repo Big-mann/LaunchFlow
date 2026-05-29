@@ -8202,6 +8202,18 @@ async def stripe_webhook(request: Request):
 
         session_id = session.get("id", "")
         meta = session.get("metadata") or {}
+
+        # Premium upgrade — update is_pro and skip order creation
+        if meta.get("type") == "premium_upgrade":
+            user_id = int(meta.get("user_id", 0))
+            if user_id:
+                conn = db()
+                cur = conn.cursor()
+                cur.execute("UPDATE users SET is_pro = 1 WHERE id = ?", (user_id,))
+                conn.commit()
+                conn.close()
+            return HTMLResponse("ok")
+
         item_id = int(meta.get("item_id", 0))
         store_id = int(meta.get("store_id", 0))
         quantity = int(meta.get("quantity", 1))
