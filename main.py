@@ -498,6 +498,8 @@ def init_db():
     add_column_if_missing(cur, "users", "ai_uses", "INTEGER DEFAULT 0")
     add_column_if_missing(cur, "users", "reset_token", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "users", "reset_token_expires", "INTEGER DEFAULT 0")
+    add_column_if_missing(cur, "users", "stripe_customer_id", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "users", "stripe_subscription_id", "TEXT DEFAULT ''")
 
     add_column_if_missing(cur, "products", "slug", "TEXT")
     add_column_if_missing(cur, "products", "theme", "TEXT DEFAULT 'blue'")
@@ -8079,13 +8081,21 @@ def create_checkout_session(request: Request):
                         "description": "Unlimited stores, AI features, and premium tools.",
                     },
                     "unit_amount": PREMIUM_PRICE * 100,
+                    "recurring": {"interval": "month"},
                 },
                 "quantity": 1,
             }],
-            mode="payment",
+            mode="subscription",
             customer_email=user["email"],
             success_url=f"{base_url}/upgrade-success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{base_url}/upgrade",
+            subscription_data={
+                "metadata": {
+                    "user_id": str(user["id"]),
+                    "user_email": user["email"],
+                    "type": "premium_upgrade",
+                }
+            },
             metadata={
                 "user_id": str(user["id"]),
                 "user_email": user["email"],
@@ -8117,13 +8127,15 @@ def upgrade_success(session_id: str = "", request: Request = None):
     if session_id:
         try:
             session = stripe.checkout.Session.retrieve(session_id)
-            if (
-                session.payment_status == "paid"
-                and session.metadata.get("type") == "premium_upgrade"
-            ):
+            if session.metadata.get("type") == "premium_upgrade":
+                subscription_id = session.subscription or ""
+                customer_id = session.customer or ""
                 conn = db()
                 cur = conn.cursor()
-                cur.execute("UPDATE users SET is_pro = 1 WHERE id = ?", (user["id"],))
+                cur.execute(
+                    "UPDATE users SET is_pro = 1, stripe_subscription_id = ?, stripe_customer_id = ? WHERE id = ?",
+                    (subscription_id, customer_id, user["id"])
+                )
                 conn.commit()
                 conn.close()
         except Exception:
@@ -8151,6 +8163,24 @@ def manage_subscription(request: Request):
     if not user["is_pro"]:
         return RedirectResponse("/upgrade", status_code=303)
 
+    portal_url = ""
+    if user.get("stripe_customer_id"):
+        try:
+            base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+            portal = stripe.billing_portal.Session.create(
+                customer=user["stripe_customer_id"],
+                return_url=f"{base_url}/settings",
+            )
+            portal_url = portal.url
+        except Exception:
+            pass
+
+    manage_button = (
+        f'<a class="button" href="{portal_url}" target="_blank">Manage / Cancel Subscription</a>'
+        if portal_url else
+        '<p style="color:#94a3b8;font-size:14px;">To cancel, contact support at teal.plushi@gmail.com</p>'
+    )
+
     return layout(f"""
     <div class="container narrow">
         {top_nav(user)}
@@ -8159,7 +8189,7 @@ def manage_subscription(request: Request):
 
         <div class="panel">
             <p class="eyebrow">Subscription</p>
-            <h1>Premium Plan</h1>
+            <h1>Premium Plan — $20/mo</h1>
             <p>You're on the LaunchFlow Premium plan with full access to all features.</p>
 
             <div class="premium-feature-list">
@@ -8171,7 +8201,10 @@ def manage_subscription(request: Request):
                 <div class="premium-feature-item">Seller growth features</div>
             </div>
 
-            <a class="button ghost" href="/settings">Back to Settings</a>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px;">
+                {manage_button}
+                <a class="button ghost" href="/settings">Back to Settings</a>
+            </div>
         </div>
     </div>
     """, title="Manage Subscription")
@@ -8206,10 +8239,15 @@ async def stripe_webhook(request: Request):
         # Premium upgrade — update is_pro and skip order creation
         if meta.get("type") == "premium_upgrade":
             user_id = int(meta.get("user_id", 0))
+            subscription_id = session.get("subscription") or ""
+            customer_id = session.get("customer") or ""
             if user_id:
                 conn = db()
                 cur = conn.cursor()
-                cur.execute("UPDATE users SET is_pro = 1 WHERE id = ?", (user_id,))
+                cur.execute(
+                    "UPDATE users SET is_pro = 1, stripe_subscription_id = ?, stripe_customer_id = ? WHERE id = ?",
+                    (subscription_id, customer_id, user_id)
+                )
                 conn.commit()
                 conn.close()
             return HTMLResponse("ok")
@@ -8302,6 +8340,46 @@ async def stripe_webhook(request: Request):
             postal=address_postal,
             country=address_country,
         )
+
+    # Recurring subscription payment succeeded — keep premium active
+    elif event.get("type") == "invoice.payment_succeeded":
+        invoice = event["data"]["object"]
+        subscription_id = invoice.get("subscription") or ""
+        customer_id = invoice.get("customer") or ""
+        if subscription_id:
+            conn = db()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE users SET is_pro = 1 WHERE stripe_subscription_id = ?",
+                (subscription_id,)
+            )
+            if cur.rowcount == 0 and customer_id:
+                cur.execute(
+                    "UPDATE users SET is_pro = 1 WHERE stripe_customer_id = ?",
+                    (customer_id,)
+                )
+            conn.commit()
+            conn.close()
+
+    # Subscription cancelled or payment failed — revoke premium
+    elif event.get("type") in ("customer.subscription.deleted", "invoice.payment_failed"):
+        obj = event["data"]["object"]
+        subscription_id = obj.get("id") or obj.get("subscription") or ""
+        customer_id = obj.get("customer") or ""
+        if subscription_id:
+            conn = db()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE users SET is_pro = 0 WHERE stripe_subscription_id = ?",
+                (subscription_id,)
+            )
+            if cur.rowcount == 0 and customer_id:
+                cur.execute(
+                    "UPDATE users SET is_pro = 0 WHERE stripe_customer_id = ?",
+                    (customer_id,)
+                )
+            conn.commit()
+            conn.close()
 
     return HTMLResponse("ok")
 
