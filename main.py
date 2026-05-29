@@ -9070,6 +9070,17 @@ def delete_discount(code_id: int, request: Request):
 
 
 # -----------------------------
+# PROMOTION AGENT — starts as a background daemon thread
+# -----------------------------
+try:
+    import promo_agent as _promo
+    _promo.start()
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger("launchflow").warning("Promo agent failed to start: %s", _e)
+
+
+# -----------------------------
 # CLEAN STORE URLs  /{slug} → /s/{slug}
 # Must be last route so it doesn't shadow any real paths
 # -----------------------------
