@@ -1,20 +1,39 @@
 import sqlite3
 import re
 import hashlib
+import secrets
+import logging
 import os
 import json
 import stripe
 import random
 import shutil
 import uuid
+import smtplib
+from datetime import datetime, timedelta
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from jose import JWTError, jwt
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("launchflow")
+
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    psycopg2 = None
+import cloudinary
+import cloudinary.uploader
 
 from typing import List
 from urllib.parse import quote_plus
 
+import anthropic
 from dotenv import load_dotenv
-from openai import OpenAI
-from PIL import Image
+from PIL import Image, ImageOps
 import pillow_heif
+import bcrypt as _bcrypt
 
 from fastapi import FastAPI, Form, Request, File, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -24,11 +43,36 @@ pillow_heif.register_heif_opener()
 
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+JWT_SECRET = os.getenv("JWT_SECRET") or os.getenv("SECRET_KEY") or secrets.token_hex(32)
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_DAYS = 30
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgres://", "postgresql://", 1)
+
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+CLOUDINARY_API_KEY    = os.getenv("CLOUDINARY_API_KEY", "")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
+
+if CLOUDINARY_CLOUD_NAME:
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD_NAME,
+        api_key=CLOUDINARY_API_KEY,
+        api_secret=CLOUDINARY_API_SECRET,
+        secure=True,
+    )
+
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "LaunchFlow <noreply@launchflow.store>")
+
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -45,6 +89,70 @@ PREMIUM_PRICE = 20
 BASE_URL = os.getenv("BASE_URL", "https://launchflow.store")
 
 
+def send_email(to: str, subject: str, html: str):
+    if not SMTP_USER or not SMTP_PASS or not to:
+        return
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_FROM
+        msg["To"] = to
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_USER, to, msg.as_string())
+    except Exception as e:
+        logger.error("Email send error: %s", e)
+
+
+def send_order_emails(order_id: int, item_name: str, store_name: str,
+                      customer_email: str, seller_email: str,
+                      amount: float, quantity: int,
+                      shipping_name: str, address_line1: str,
+                      city: str, state: str, postal: str, country: str):
+
+    track_url = f"{BASE_URL}/track-order/{order_id}"
+    address_block = f"{shipping_name}<br>{address_line1}<br>{city}, {state} {postal}<br>{country}"
+
+    buyer_html = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#0f172a;color:#e2e8f0;padding:32px;border-radius:12px;">
+      <h1 style="color:#7c3aed;font-size:28px;margin:0 0 4px;">Order Confirmed</h1>
+      <p style="color:#94a3b8;margin:0 0 24px;">Thank you for your purchase!</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+        <tr><td style="padding:10px 0;color:#94a3b8;border-bottom:1px solid #1e293b;">Store</td><td style="padding:10px 0;text-align:right;border-bottom:1px solid #1e293b;">{store_name}</td></tr>
+        <tr><td style="padding:10px 0;color:#94a3b8;border-bottom:1px solid #1e293b;">Item</td><td style="padding:10px 0;text-align:right;border-bottom:1px solid #1e293b;">{item_name}</td></tr>
+        <tr><td style="padding:10px 0;color:#94a3b8;border-bottom:1px solid #1e293b;">Qty</td><td style="padding:10px 0;text-align:right;border-bottom:1px solid #1e293b;">{quantity}</td></tr>
+        <tr><td style="padding:10px 0;color:#94a3b8;">Total</td><td style="padding:10px 0;text-align:right;font-weight:700;font-size:18px;color:#7c3aed;">${amount:.2f}</td></tr>
+      </table>
+      <p style="color:#94a3b8;margin:0 0 8px;font-size:14px;">Shipping to</p>
+      <p style="margin:0 0 24px;font-size:14px;">{address_block}</p>
+      <a href="{track_url}" style="display:inline-block;background:#7c3aed;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">Track Your Order</a>
+      <p style="margin:32px 0 0;font-size:12px;color:#475569;">Powered by <a href="{BASE_URL}" style="color:#7c3aed;">LaunchFlow</a></p>
+    </div>
+    """
+
+    seller_html = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#0f172a;color:#e2e8f0;padding:32px;border-radius:12px;">
+      <h1 style="color:#10b981;font-size:28px;margin:0 0 4px;">New Order!</h1>
+      <p style="color:#94a3b8;margin:0 0 24px;">You have a new order in <strong>{store_name}</strong>.</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+        <tr><td style="padding:10px 0;color:#94a3b8;border-bottom:1px solid #1e293b;">Item</td><td style="padding:10px 0;text-align:right;border-bottom:1px solid #1e293b;">{item_name}</td></tr>
+        <tr><td style="padding:10px 0;color:#94a3b8;border-bottom:1px solid #1e293b;">Qty</td><td style="padding:10px 0;text-align:right;border-bottom:1px solid #1e293b;">{quantity}</td></tr>
+        <tr><td style="padding:10px 0;color:#94a3b8;border-bottom:1px solid #1e293b;">Amount</td><td style="padding:10px 0;text-align:right;font-weight:700;color:#10b981;">${amount:.2f}</td></tr>
+        <tr><td style="padding:10px 0;color:#94a3b8;">Buyer</td><td style="padding:10px 0;text-align:right;">{customer_email}</td></tr>
+      </table>
+      <p style="color:#94a3b8;margin:0 0 8px;font-size:14px;">Ship to</p>
+      <p style="margin:0 0 24px;font-size:14px;">{address_block}</p>
+      <a href="{BASE_URL}/orders" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">Manage Orders</a>
+      <p style="margin:32px 0 0;font-size:12px;color:#475569;">Powered by <a href="{BASE_URL}" style="color:#7c3aed;">LaunchFlow</a></p>
+    </div>
+    """
+
+    send_email(customer_email, f"Your order from {store_name} is confirmed!", buyer_html)
+    if seller_email:
+        send_email(seller_email, f"New order — {item_name} × {quantity}", seller_html)
 
 
 VIRAL_PRODUCTS = [
@@ -110,17 +218,93 @@ VIRAL_PRODUCTS = [
 # -----------------------------
 # DATABASE
 # -----------------------------
+
+class _PGCursor:
+    """Wraps psycopg2 RealDictCursor — converts ? placeholders to %s automatically."""
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, query, params=None):
+        self._cur.execute(query.replace("?", "%s"), params)
+        return self
+
+    def executemany(self, query, params_list):
+        self._cur.executemany(query.replace("?", "%s"), params_list)
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    @property
+    def lastrowid(self):
+        self._cur.execute("SELECT lastval()")
+        row = self._cur.fetchone()
+        return row["lastval"] if row else None
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+
+class _PGConn:
+    """Wraps psycopg2 connection to mimic sqlite3 interface."""
+    def __init__(self, raw):
+        self._raw = raw
+
+    def cursor(self):
+        return _PGCursor(self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
+
+    def commit(self):
+        self._raw.commit()
+
+    def close(self):
+        self._raw.close()
+
+    def execute(self, query, params=None):
+        cur = self.cursor()
+        cur.execute(query, params)
+        return cur
+
+
 def db():
+    if DATABASE_URL:
+        return _PGConn(psycopg2.connect(DATABASE_URL))
+    # Local fallback — SQLite
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def add_column_if_missing(cur, table, column, definition):
-    cur.execute(f"PRAGMA table_info({table})")
-    columns = [row["name"] for row in cur.fetchall()]
-    if column not in columns:
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    if DATABASE_URL:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+    else:
+        cur.execute(f"PRAGMA table_info({table})")
+        columns = [row["name"] for row in cur.fetchall()]
+        if column not in columns:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+# -----------------------------
+# IMAGE UPLOAD
+# -----------------------------
+
+def upload_image(file_path: str) -> str:
+    """Upload to Cloudinary when configured, otherwise serve from local static."""
+    if CLOUDINARY_CLOUD_NAME:
+        try:
+            result = cloudinary.uploader.upload(
+                file_path,
+                folder="launchflow",
+                resource_type="image",
+            )
+            return result["secure_url"]
+        except Exception as e:
+            logger.error("Cloudinary upload error: %s", e)
+    return f"/static/uploads/{os.path.basename(file_path)}"
 
 
 def init_db():
@@ -129,7 +313,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         email TEXT UNIQUE,
         password TEXT,
         is_pro INTEGER DEFAULT 0,
@@ -142,7 +326,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         user_id INTEGER,
         name TEXT,
         description TEXT,
@@ -168,7 +352,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS store_pages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         store_id INTEGER,
         user_id INTEGER,
         title TEXT,
@@ -183,7 +367,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS store_sections (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         store_id INTEGER,
         page_id INTEGER DEFAULT 0,
         section_type TEXT,
@@ -197,7 +381,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS store_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         store_id INTEGER,
         user_id INTEGER,
         name TEXT,
@@ -215,7 +399,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS cart_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         session_id TEXT DEFAULT '',
         user_id INTEGER DEFAULT 0,
         store_item_id INTEGER,
@@ -226,7 +410,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS store_likes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         store_id INTEGER,
         user_id INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -235,7 +419,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS store_followers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         store_id INTEGER,
         user_id INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -244,7 +428,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS store_themes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         creator_id INTEGER,
         name TEXT,
         config_json TEXT DEFAULT '{}',
@@ -256,7 +440,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         product_id INTEGER,
         store_item_id INTEGER,
         amount REAL,
@@ -284,7 +468,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS conversations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         buyer_email TEXT,
         seller_id INTEGER,
         store_id INTEGER,
@@ -296,7 +480,7 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         conversation_id INTEGER,
         sender_type TEXT,
         sender_user_id INTEGER DEFAULT 0,
@@ -312,6 +496,8 @@ def init_db():
     add_column_if_missing(cur, "users", "stripe_account_id", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "users", "stripe_onboarding_complete", "INTEGER DEFAULT 0")
     add_column_if_missing(cur, "users", "ai_uses", "INTEGER DEFAULT 0")
+    add_column_if_missing(cur, "users", "reset_token", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "users", "reset_token_expires", "INTEGER DEFAULT 0")
 
     add_column_if_missing(cur, "products", "slug", "TEXT")
     add_column_if_missing(cur, "products", "theme", "TEXT DEFAULT 'blue'")
@@ -326,6 +512,9 @@ def init_db():
     add_column_if_missing(cur, "products", "page_title", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "products", "page_subtitle", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "products", "page_content", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "products", "shipping_type", "TEXT DEFAULT 'free'")
+    add_column_if_missing(cur, "products", "shipping_rate", "REAL DEFAULT 0")
+    add_column_if_missing(cur, "products", "shipping_info", "TEXT DEFAULT ''")
 
     add_column_if_missing(cur, "store_pages", "store_id", "INTEGER")
     add_column_if_missing(cur, "store_pages", "user_id", "INTEGER")
@@ -348,6 +537,7 @@ def init_db():
     add_column_if_missing(cur, "store_items", "slug", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "store_items", "featured", "INTEGER DEFAULT 0")
     add_column_if_missing(cur, "store_items", "views", "INTEGER DEFAULT 0")
+    add_column_if_missing(cur, "store_items", "sort_order", "INTEGER DEFAULT 0")
 
     add_column_if_missing(cur, "cart_items", "session_id", "TEXT DEFAULT ''")
     add_column_if_missing(cur, "cart_items", "user_id", "INTEGER DEFAULT 0")
@@ -386,6 +576,48 @@ def init_db():
     add_column_if_missing(cur, "orders", "seller_notes", "TEXT DEFAULT ''")
 
     add_column_if_missing(cur, "messages", "read_at", "TEXT DEFAULT ''")
+
+    add_column_if_missing(cur, "store_items", "cost_price", "REAL DEFAULT 0")
+    add_column_if_missing(cur, "store_items", "supplier_url", "TEXT DEFAULT ''")
+    add_column_if_missing(cur, "store_items", "supplier_name", "TEXT DEFAULT ''")
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS suppliers (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        name TEXT,
+        url TEXT DEFAULT '',
+        contact_email TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        shipping_days INTEGER DEFAULT 7,
+        is_active INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS discount_codes (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        code TEXT,
+        discount_type TEXT DEFAULT 'percentage',
+        value REAL DEFAULT 10,
+        max_uses INTEGER DEFAULT 0,
+        uses_count INTEGER DEFAULT 0,
+        expires_at TEXT DEFAULT '',
+        is_active INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.executescript("""
+    CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
+    CREATE INDEX IF NOT EXISTS idx_products_slug ON products(slug);
+    CREATE INDEX IF NOT EXISTS idx_store_items_store_id ON store_items(store_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_product_id ON orders(product_id);
+    CREATE INDEX IF NOT EXISTS idx_cart_items_session_id ON cart_items(session_id);
+    CREATE INDEX IF NOT EXISTS idx_cart_items_user_id ON cart_items(user_id);
+    """)
 
     conn.commit()
     conn.close()
@@ -734,14 +966,24 @@ def chat_unread_count(request: Request):
 # -----------------------------
 # HELPERS
 # -----------------------------
-def hash_password(password):
+def hash_password(password: str) -> str:
+    return _bcrypt.hashpw(password.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
+
+
+def _sha256_hash(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-def verify_password(password, hashed_password):
+def verify_password(password: str, hashed_password: str) -> bool:
     if not hashed_password:
         return False
-    return hash_password(password) == hashed_password
+    # Legacy SHA256 hash is exactly 64 hex chars
+    if len(hashed_password) == 64:
+        return _sha256_hash(password) == hashed_password
+    try:
+        return _bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except Exception:
+        return False
 
 
 def slugify(text):
@@ -749,6 +991,230 @@ def slugify(text):
     text = re.sub(r"[^a-z0-9]+", "-", text)
     text = text.strip("-")
     return text or "store"
+
+
+def _hex_to_rgb(hex_color: str):
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except Exception:
+        return 124, 58, 237
+
+
+def generate_store_css(ai_design: dict) -> str:
+    """Return Google Fonts link + a <style> block with fully unique per-store CSS."""
+    accent    = ai_design.get("accent_color", "#7c3aed")
+    secondary = ai_design.get("secondary_color", "#06b6d4")
+    template  = ai_design.get("template_type", "editorial")
+    button_style = ai_design.get("button_style", "rounded")
+    design_style = ai_design.get("design_style", "glass")
+
+    ar, ag, ab = _hex_to_rgb(accent)
+    sr, sg, sb = _hex_to_rgb(secondary)
+
+    # ── Google Fonts per template ────────────────────────────────────
+    FONT_MAP = {
+        "luxury":     ("'Playfair Display', Georgia, serif",
+                       "family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400"),
+        "editorial":  ("'Merriweather', Georgia, serif",
+                       "family=Merriweather:wght@300;400;700;900"),
+        "streetwear": ("'Bebas Neue', Impact, sans-serif",
+                       "family=Bebas+Neue&family=Inter:wght@400;700;900"),
+        "tech":       ("'Space Grotesk', system-ui, sans-serif",
+                       "family=Space+Grotesk:wght@300;400;500;600;700"),
+        "beauty":     ("'Cormorant+Garamond', Georgia, serif",
+                       "family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400"),
+        "garage":     ("'Barlow Condensed', Impact, sans-serif",
+                       "family=Barlow+Condensed:wght@400;600;700;800;900"),
+        "wellness":   ("'Nunito', system-ui, sans-serif",
+                       "family=Nunito:wght@300;400;600;700;800"),
+        "food":       ("'Libre Baskerville', Georgia, serif",
+                       "family=Libre+Baskerville:ital,wght@0,400;0,700;1,400"),
+        "art":        ("'DM Serif Display', Georgia, serif",
+                       "family=DM+Serif+Display:ital@0;1"),
+        "sports":     ("'Oswald', Impact, sans-serif",
+                       "family=Oswald:wght@400;500;600;700"),
+    }
+    heading_font, gfont_query = FONT_MAP.get(template, ("inherit", ""))
+    font_tag = (
+        f'<link rel="preconnect" href="https://fonts.googleapis.com">'
+        f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        f'<link href="https://fonts.googleapis.com/css2?{gfont_query}&display=swap" rel="stylesheet">'
+    ) if gfont_query else ""
+
+    # ── Card & button radius per template ────────────────────────────
+    card_radius = {
+        "streetwear": "4px",  "luxury": "0px",    "beauty": "32px",
+        "wellness":   "36px", "art":    "0px",     "sports": "6px",
+        "food":       "20px", "tech":   "12px",    "garage": "10px",
+    }.get(template, "26px")
+
+    btn_radius = {
+        "streetwear": "0px",  "luxury": "0px",    "beauty": "999px",
+        "wellness":   "999px","art":    "0px",     "sports": "4px",
+        "food":       "10px", "tech":   "8px",     "garage": "6px",
+        "pill":       "999px","rounded":"16px",    "sharp":  "6px",
+    }.get(button_style if button_style in ("pill","rounded","sharp","glow","luxury") else template, "16px")
+
+    btn_glow = f"box-shadow: 0 0 32px rgba({ar},{ag},{ab},0.55);" if button_style == "glow" else ""
+
+    # ── Per-template backgrounds ─────────────────────────────────────
+    if template == "beauty":
+        body_bg     = (f"radial-gradient(circle at 80% 10%, rgba({ar},{ag},{ab},0.45), transparent 28%),"
+                       f"radial-gradient(circle at 10% 80%, rgba({sr},{sg},{sb},0.35), transparent 32%),"
+                       f"linear-gradient(135deg, #4a102a, rgba(249,168,212,0.85))")
+        hero_bg     = "rgba(255,255,255,0.22)"; hero_border = "rgba(255,255,255,0.32)"
+        sec_bg      = "rgba(255,255,255,0.18)"; sec_border  = "rgba(255,255,255,0.24)"
+        img_h = "340px"; text_color = "#fff"; muted = "rgba(255,255,255,0.82)"
+    elif template == "garage":
+        body_bg     = (f"radial-gradient(circle at top right, rgba({ar},{ag},{ab},0.28), transparent 30%),"
+                       f"linear-gradient(135deg, #120804, #3b1a0a)")
+        hero_bg     = (f"linear-gradient(135deg, rgba(0,0,0,0.6), rgba({ar},{ag},{ab},0.22)),"
+                       f"repeating-linear-gradient(45deg,rgba(255,255,255,0.03) 0 2px,transparent 2px 10px)")
+        hero_border = f"rgba({ar},{ag},{ab},0.32)"
+        sec_bg      = "rgba(0,0,0,0.30)"; sec_border = f"rgba({ar},{ag},{ab},0.22)"
+        img_h = "260px"; text_color = "#fff"; muted = "#fed7aa"
+    elif template == "streetwear":
+        body_bg     = (f"radial-gradient(circle at top left, rgba({ar},{ag},{ab},0.18), transparent 30%),"
+                       f"linear-gradient(135deg, #030303, #27272a)")
+        hero_bg     = "linear-gradient(135deg, #080808, #18181b)"; hero_border = "rgba(255,255,255,0.20)"
+        sec_bg      = "rgba(255,255,255,0.05)"; sec_border = "rgba(255,255,255,0.10)"
+        img_h = "300px"; text_color = "#fff"; muted = "#e5e7eb"
+    elif template == "tech":
+        body_bg     = (f"radial-gradient(circle at top right, rgba({ar},{ag},{ab},0.34), transparent 35%),"
+                       f"radial-gradient(circle at bottom left, rgba({sr},{sg},{sb},0.24), transparent 35%),"
+                       f"linear-gradient(135deg, #020617, #0f172a)")
+        hero_bg     = f"linear-gradient(135deg,rgba(15,23,42,0.88),rgba(2,6,23,0.95))"
+        hero_border = f"rgba({ar},{ag},{ab},0.30)"
+        sec_bg      = f"rgba({ar},{ag},{ab},0.08)"; sec_border = f"rgba({ar},{ag},{ab},0.24)"
+        img_h = "220px"; text_color = "#fff"; muted = "#cffafe"
+    elif template == "luxury":
+        body_bg     = (f"radial-gradient(circle at top right, rgba({ar},{ag},{ab},0.22), transparent 34%),"
+                       f"linear-gradient(135deg, #050509, #1b1630)")
+        hero_bg     = "transparent"; hero_border = f"rgba({ar},{ag},{ab},0.40)"
+        sec_bg      = "rgba(255,255,255,0.05)"; sec_border = f"rgba({ar},{ag},{ab},0.22)"
+        img_h = "360px"; text_color = "#fff"; muted = "#fef3c7"
+    elif template == "wellness":
+        body_bg     = (f"radial-gradient(circle at 30% 20%, rgba({ar},{ag},{ab},0.28), transparent 40%),"
+                       f"radial-gradient(circle at 70% 80%, rgba({sr},{sg},{sb},0.22), transparent 40%),"
+                       f"linear-gradient(160deg, #0d1f1a, #1a2e2a)")
+        hero_bg     = "rgba(255,255,255,0.12)"; hero_border = f"rgba({ar},{ag},{ab},0.28)"
+        sec_bg      = "rgba(255,255,255,0.08)"; sec_border = f"rgba({ar},{ag},{ab},0.18)"
+        img_h = "280px"; text_color = "#fff"; muted = "#d1fae5"
+    elif template == "food":
+        body_bg     = (f"radial-gradient(circle at top left, rgba({ar},{ag},{ab},0.30), transparent 32%),"
+                       f"linear-gradient(150deg, #1a0a00, #2d1200)")
+        hero_bg     = f"linear-gradient(135deg,rgba({ar},{ag},{ab},0.18),rgba(0,0,0,0.72))"
+        hero_border = f"rgba({ar},{ag},{ab},0.35)"
+        sec_bg      = "rgba(255,255,255,0.07)"; sec_border = f"rgba({ar},{ag},{ab},0.20)"
+        img_h = "280px"; text_color = "#fff"; muted = "#fde68a"
+    elif template == "art":
+        body_bg     = f"linear-gradient(170deg, #f5f0eb 0%, #e8ddd0 40%, rgba({ar},{ag},{ab},0.08) 100%)"
+        hero_bg     = "rgba(255,255,255,0.65)"; hero_border = f"rgba({ar},{ag},{ab},0.22)"
+        sec_bg      = "rgba(255,255,255,0.55)"; sec_border = f"rgba({ar},{ag},{ab},0.16)"
+        img_h = "360px"; text_color = "#111"; muted = "#444"
+    elif template == "sports":
+        body_bg     = (f"radial-gradient(circle at top right, rgba({ar},{ag},{ab},0.40), transparent 35%),"
+                       f"linear-gradient(135deg, #050505, #0f0f0f)")
+        hero_bg     = f"linear-gradient(135deg,rgba({ar},{ag},{ab},0.18),rgba(0,0,0,0.90))"
+        hero_border = f"rgba({ar},{ag},{ab},0.35)"
+        sec_bg      = f"rgba({ar},{ag},{ab},0.08)"; sec_border = f"rgba({ar},{ag},{ab},0.22)"
+        img_h = "260px"; text_color = "#fff"; muted = "#e5e7eb"
+    else:  # editorial / default
+        body_bg     = (f"radial-gradient(circle at top left, rgba({ar},{ag},{ab},0.24), transparent 30%),"
+                       f"linear-gradient(135deg, #111827, #1e293b)")
+        hero_bg     = "rgba(255,255,255,0.10)"; hero_border = "rgba(255,255,255,0.18)"
+        sec_bg      = "rgba(255,255,255,0.08)"; sec_border = "rgba(255,255,255,0.14)"
+        img_h = "260px"; text_color = "#fff"; muted = "#dbeafe"
+
+    # ── Card backgrounds ─────────────────────────────────────────────
+    if template == "luxury":
+        card_bg = "transparent"; card_border = f"rgba({ar},{ag},{ab},0.28)"
+    elif template in ("tech", "sports"):
+        card_bg = f"rgba({ar},{ag},{ab},0.09)"; card_border = f"rgba({ar},{ag},{ab},0.34)"
+    elif template == "art":
+        card_bg = "rgba(255,255,255,0.82)"; card_border = f"rgba({ar},{ag},{ab},0.20)"
+    else:
+        card_bg = "rgba(255,255,255,0.10)"; card_border = "rgba(255,255,255,0.16)"
+
+    # ── Template-specific extras ─────────────────────────────────────
+    extra = ""
+    if template == "streetwear":
+        extra = f"""
+        .ai-custom-store .storefront-hero-content h1 {{text-transform:uppercase;letter-spacing:-4px;}}
+        .ai-custom-store .storefront-product-info h3 {{text-transform:uppercase;letter-spacing:-1px;}}
+        .ai-custom-store .storefront-product-card img {{filter:contrast(1.05) saturate(0.88);}}"""
+    elif template == "luxury":
+        extra = f"""
+        .ai-custom-store .storefront-product-card {{border:none !important;border-bottom:1px solid rgba({ar},{ag},{ab},0.28) !important;}}
+        .ai-custom-store .storefront-product-card:hover {{transform:none !important;background:rgba({ar},{ag},{ab},0.05) !important;}}
+        .ai-custom-store .storefront-hero-content h1 {{font-weight:400;letter-spacing:3px;}}"""
+    elif template == "tech":
+        extra = f"""
+        @keyframes techPulse{{from{{box-shadow:0 0 8px rgba({ar},{ag},{ab},0.22);}}to{{box-shadow:0 0 32px rgba({ar},{ag},{ab},0.60);}}}}
+        .ai-custom-store .storefront-product-card{{animation:techPulse 2.8s ease-in-out infinite alternate !important;}}
+        .ai-custom-store .storefront-hero-content h1 {{letter-spacing:-3px;}}"""
+    elif template == "beauty":
+        extra = f"""
+        .ai-custom-store .storefront-hero-content h1 {{font-weight:300;letter-spacing:2px;}}
+        .ai-custom-store .storefront-product-card:hover img {{transform:scale(1.07);}}"""
+    elif template == "wellness":
+        extra = f"""
+        .ai-custom-store .storefront-hero-content h1 {{font-weight:300;letter-spacing:-1px;}}"""
+    elif template == "art":
+        extra = f"""
+        .ai-custom-store .storefront-product-card h3,.ai-custom-store .storefront-product-info p,.ai-custom-store .storefront-product-info strong {{color:#111 !important;}}
+        .ai-custom-store .public-store-nav strong,.ai-custom-store .storefront-hero-content h1,.ai-custom-store .storefront-hero-content h2 {{color:#111 !important;}}
+        .ai-custom-store .storefront-hero-content h1 {{font-style:italic;font-weight:400;}}
+        .ai-custom-store .tag {{color:{accent} !important;background:rgba({ar},{ag},{ab},0.10) !important;}}"""
+    elif template == "food":
+        extra = f"""
+        .ai-custom-store .storefront-hero-content h1 {{font-style:italic;letter-spacing:-1px;}}
+        .ai-custom-store .storefront-product-card img {{filter:saturate(1.18) contrast(1.04);}}"""
+    elif template in ("sports", "garage"):
+        extra = f"""
+        .ai-custom-store .storefront-hero-content h1 {{text-transform:uppercase;letter-spacing:-3px;font-weight:900;}}
+        .ai-custom-store .storefront-product-info h3 {{text-transform:uppercase;}}"""
+
+    return f"""{font_tag}
+<style>
+.ai-custom-store {{
+    min-height:100vh;
+    background:{body_bg};
+    background-size:220% 220%;
+    color:{text_color};
+    animation:lf-drift 16s ease infinite;
+}}
+@keyframes lf-drift {{
+    0%  {{background-position:0% 0%;}}
+    33% {{background-position:60% 40%;}}
+    66% {{background-position:40% 80%;}}
+    100%{{background-position:0% 0%;}}
+}}
+.ai-custom-store .storefront-hero {{background:{hero_bg} !important;border:1px solid {hero_border} !important;}}
+.ai-custom-store .storefront-product-card {{background:{card_bg} !important;border:1px solid {card_border} !important;border-radius:{card_radius} !important;}}
+.ai-custom-store .storefront-product-card img {{height:{img_h} !important;}}
+.ai-custom-store .public-store-section,.ai-custom-store .ai-brand-section {{background:{sec_bg} !important;border:1px solid {sec_border} !important;}}
+.ai-custom-store .storefront-stats div,.ai-custom-store .ai-trust-row div {{background:rgba({ar},{ag},{ab},0.14) !important;border:1px solid rgba({ar},{ag},{ab},0.24) !important;}}
+.ai-custom-store .button:not(.ghost) {{background:{accent} !important;color:#fff !important;border-radius:{btn_radius} !important;{btn_glow}}}
+.ai-custom-store .button.ghost {{border-radius:{btn_radius} !important;border-color:rgba({ar},{ag},{ab},0.45) !important;}}
+.ai-custom-store h1,.ai-custom-store h2,.ai-custom-store h3 {{font-family:{heading_font};}}
+.ai-custom-store p,.ai-custom-store span:not(.cart-count-badge):not(.chat-mini-badge) {{color:{muted};}}
+.ai-custom-store .eyebrow {{color:{accent} !important;opacity:1;}}
+.ai-custom-store .store-brand-badge {{
+    display:inline-block;padding:6px 18px;border-radius:999px;
+    background:rgba({ar},{ag},{ab},0.18);border:1px solid rgba({ar},{ag},{ab},0.38);
+    color:{accent};font-size:12px;font-weight:900;letter-spacing:1.8px;
+    text-transform:uppercase;margin-bottom:20px;
+}}
+.ai-custom-store .tag {{background:rgba({ar},{ag},{ab},0.22) !important;color:#fff !important;}}
+.ai-custom-store .storefront-product-card:hover {{box-shadow:0 24px 70px rgba({ar},{ag},{ab},0.32) !important;transform:translateY(-6px);}}
+.ai-custom-store .public-store-nav a {{border-color:rgba({ar},{ag},{ab},0.30) !important;}}
+.ai-custom-store .public-store-nav a:hover {{background:rgba({ar},{ag},{ab},0.22) !important;}}
+{extra}
+</style>"""
 
 
 def money(value):
@@ -774,25 +1240,40 @@ def unique_slug(base_slug, product_id=None):
     cur = conn.cursor()
     slug = base_slug
     i = 2
+    try:
+        while True:
+            if product_id:
+                cur.execute("SELECT id FROM products WHERE slug = ? AND id != ?", (slug, product_id))
+            else:
+                cur.execute("SELECT id FROM products WHERE slug = ?", (slug,))
 
-    while True:
-        if product_id:
-            cur.execute("SELECT id FROM products WHERE slug = ? AND id != ?", (slug, product_id))
-        else:
-            cur.execute("SELECT id FROM products WHERE slug = ?", (slug,))
+            if not cur.fetchone():
+                return slug
 
-        exists = cur.fetchone()
+            slug = f"{base_slug}-{i}"
+            i += 1
+    finally:
+        conn.close()
 
-        if not exists:
-            conn.close()
-            return slug
 
-        slug = f"{base_slug}-{i}"
-        i += 1
+def _make_session_cookie(email: str) -> str:
+    expire = datetime.utcnow() + timedelta(days=JWT_EXPIRE_DAYS)
+    return jwt.encode({"sub": email, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _verify_session_cookie(token: str) -> str | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        return None
 
 
 def get_current_user(request: Request):
-    email = request.cookies.get("LaunchFlow_user")
+    token = request.cookies.get("LaunchFlow_user")
+    email = _verify_session_cookie(token)
 
     if not email:
         return None
@@ -846,24 +1327,42 @@ def login_user(email, password):
 
     cur.execute("SELECT * FROM users WHERE email = ?", (email,))
     user = cur.fetchone()
-    conn.close()
 
     if not user:
+        conn.close()
         return None
 
     if not verify_password(password, user["password"]):
+        conn.close()
         return None
 
+    # Migrate legacy SHA256 hash to bcrypt on first login
+    if user["password"] and len(user["password"]) == 64:
+        new_hash = hash_password(password)
+        cur.execute("UPDATE users SET password = ? WHERE id = ?", (new_hash, user["id"]))
+        conn.commit()
+
+    conn.close()
     return user
 
 
-def layout(content, title="LaunchFlow"):
+def layout(content, title="LaunchFlow", description="Build and launch your online store in minutes.", og_image=""):
+    og_img_tag = f'<meta property="og:image" content="{og_image}">' if og_image else ""
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>{title}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="description" content="{description}">
+        <meta property="og:title" content="{title}">
+        <meta property="og:description" content="{description}">
+        <meta property="og:type" content="website">
+        {og_img_tag}
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:title" content="{title}">
+        <meta name="twitter:description" content="{description}">
+        <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
         <link rel="stylesheet" href="/static/style.css">
     </head>
 
@@ -876,7 +1375,7 @@ def layout(content, title="LaunchFlow"):
             <a href="/refunds">Refunds</a>
         </footer>
 
-        <button id="chat-launcher" class="chat-launcher" type="button">
+        <button id="chat-launcher" class="chat-launcher" type="button" style="display:none">
             💬
             <span id="chat-notification-count" class="chat-notification-dot hidden">0</span>
         </button>
@@ -902,6 +1401,20 @@ def layout(content, title="LaunchFlow"):
         </div>
 
         <script>
+            (function() {{
+                const params = new URLSearchParams(window.location.search);
+                const msg = params.get("msg");
+                if (msg) {{
+                    const toast = document.createElement("div");
+                    toast.textContent = decodeURIComponent(msg);
+                    toast.style.cssText = "position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#22c55e;color:#fff;padding:10px 20px;border-radius:8px;font-size:14px;font-weight:600;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.25);";
+                    document.body.appendChild(toast);
+                    setTimeout(() => toast.remove(), 3500);
+                    const url = new URL(window.location);
+                    url.searchParams.delete("msg");
+                    window.history.replaceState({{}}, "", url);
+                }}
+            }})();
             const chatLauncher = document.getElementById("chat-launcher");
             const chatWindow = document.getElementById("chat-window");
             const chatMain = document.getElementById("chat-main");
@@ -953,12 +1466,17 @@ def layout(content, title="LaunchFlow"):
                 const res = await fetch("/chat/unread-count");
                 const data = await res.json();
 
-                if (data.ok && data.unread > 0) {{
-                    notificationDot.classList.remove("hidden");
-                    notificationDot.textContent = data.unread;
+                if (data.ok) {{
+                    chatLauncher.style.display = "";
+                    if (data.unread > 0) {{
+                        notificationDot.classList.remove("hidden");
+                        notificationDot.textContent = data.unread;
+                    }} else {{
+                        notificationDot.classList.add("hidden");
+                        notificationDot.textContent = "0";
+                    }}
                 }} else {{
-                    notificationDot.classList.add("hidden");
-                    notificationDot.textContent = "0";
+                    chatLauncher.style.display = "none";
                 }}
             }}
 
@@ -1310,7 +1828,11 @@ def top_nav(user):
             </a>
         </div>
 
-        <div class="nav-links">
+        <button class="hamburger-btn" id="hamburger-btn" type="button" aria-label="Menu" onclick="document.getElementById('nav-links-mobile').classList.toggle('open')">
+            &#9776;
+        </button>
+
+        <div class="nav-links" id="nav-links-mobile">
             <a href="/dashboard">Dashboard</a>
 
             <a href="/discover">
@@ -1333,6 +1855,22 @@ def top_nav(user):
                 Orders
             </a>
 
+            <a href="/ai-product-copy">
+                AI Copy
+            </a>
+
+            <a href="/profit-calculator">
+                Profit Calc
+            </a>
+
+            <a href="/suppliers">
+                Suppliers
+            </a>
+
+            <a href="/discounts">
+                Discounts
+            </a>
+
             <a href="/cart" class="cart-nav-link">
                 Cart
                 {cart_badge}
@@ -1340,10 +1878,6 @@ def top_nav(user):
 
             <a href="/settings">
                 Settings
-            </a>
-
-            <a href="/dashboard#stores">
-                My Stores
             </a>
 
             {stripe_badge}
@@ -1355,6 +1889,34 @@ def top_nav(user):
             </a>
         </div>
     </nav>
+    <style>
+    .hamburger-btn {{
+        display: none;
+        background: none;
+        border: none;
+        color: inherit;
+        font-size: 22px;
+        cursor: pointer;
+        padding: 4px 8px;
+        margin-left: auto;
+    }}
+    @media (max-width: 768px) {{
+        .hamburger-btn {{ display: block; }}
+        .top-nav {{ flex-wrap: wrap; position: relative; }}
+        .nav-links {{
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            padding: 8px 0;
+            gap: 4px;
+        }}
+        .nav-links.open {{ display: flex; }}
+        .nav-links a, .nav-links .upgrade-pill, .nav-links .premium-active, .nav-links .nav-status {{
+            padding: 8px 16px;
+            border-radius: 6px;
+        }}
+    }}
+    </style>
     """
 
 
@@ -1378,15 +1940,19 @@ Desired vibe: {vibe_text}
 Choose template_type carefully.
 
 template_type must be one of:
-garage, luxury, streetwear, beauty, tech, editorial
+garage, luxury, streetwear, beauty, tech, editorial, wellness, food, art, sports
 
 Rules for template_type:
 - cars, car accessories, detailing, rustic, garage, tools, outdoor gear = garage
-- shampoo, skincare, haircare, beauty, feminine, wellness, clean beauty = beauty
+- shampoo, skincare, haircare, beauty, feminine, clean beauty, cosmetics = beauty
 - gaming, streetwear, hype, culture, clothing drops, bold urban = streetwear
 - tech, futuristic, software, gadgets, AI, electronics = tech
 - luxury, elegant, premium, jewelry, watches, refined = luxury
 - books, education, learning, journals, courses, knowledge, content = editorial
+- yoga, meditation, supplements, wellness, mindfulness, spa, holistic, health = wellness
+- coffee, food, restaurant, bakery, culinary, snacks, spices, meal = food
+- painting, art, gallery, prints, handmade, crafts, illustration, creative = art
+- fitness, gym, sports, athletic, training, workout, running, gear = sports
 
 Important:
 - Do NOT use minimal as a template_type.
@@ -1455,7 +2021,7 @@ Rules:
         if any(word in text for word in ["car", "cars", "garage", "detailing", "detail", "rustic", "truck", "auto", "vehicle", "tools"]):
             return "garage"
 
-        if any(word in text for word in ["shampoo", "hair", "skincare", "skin", "beauty", "makeup", "feminine", "wellness", "soap"]):
+        if any(word in text for word in ["shampoo", "hair", "skincare", "skin", "beauty", "makeup", "feminine", "cosmetic", "soap"]):
             return "beauty"
 
         if any(word in text for word in ["gaming", "streetwear", "clothing", "hype", "drop", "urban", "culture"]):
@@ -1470,6 +2036,18 @@ Rules:
         if any(word in text for word in ["book", "books", "learning", "education", "course", "journal", "knowledge", "study"]):
             return "editorial"
 
+        if any(word in text for word in ["yoga", "meditation", "supplement", "wellness", "mindfulness", "spa", "holistic", "health"]):
+            return "wellness"
+
+        if any(word in text for word in ["coffee", "food", "restaurant", "bakery", "culinary", "snack", "spice", "meal", "cafe"]):
+            return "food"
+
+        if any(word in text for word in ["painting", "art", "gallery", "print", "handmade", "craft", "illustration", "creative"]):
+            return "art"
+
+        if any(word in text for word in ["fitness", "gym", "sport", "athletic", "training", "workout", "running", "gear"]):
+            return "sports"
+
         return "editorial"
 
     def safe_choice(value, allowed, fallback):
@@ -1477,27 +2055,29 @@ Rules:
         return value if value in allowed else fallback
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            system="Return only clean valid JSON. No markdown. No explanation. No code fences.",
             messages=[
-                {
-                    "role": "system",
-                    "content": "Return only clean valid JSON. No markdown. No explanation."
-                },
                 {
                     "role": "user",
                     "content": prompt
                 }
-            ],
-            temperature=1.0
+            ]
         )
 
-        content = response.choices[0].message.content.strip()
+        content = response.content[0].text.strip()
+        # Strip any accidental markdown fences
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
         data = json.loads(content)
 
         store_name = data.get("store_name", "").strip() or "Generated Store"
 
-        allowed_templates = ["garage", "luxury", "streetwear", "beauty", "tech", "editorial"]
+        allowed_templates = ["garage", "luxury", "streetwear", "beauty", "tech", "editorial", "wellness", "food", "art", "sports"]
         template_type = safe_choice(
             data.get("template_type"),
             allowed_templates,
@@ -1590,7 +2170,7 @@ Rules:
         }
 
     except Exception as e:
-        print("AI generation error:", e)
+        logger.error("AI generation error: %s", e)
 
         template_type = choose_template_fallback(f"{idea} {audience_text} {vibe_text}")
 
@@ -1624,6 +2204,30 @@ Rules:
             accent = "#d4af37"
             secondary = "#111827"
             design_style = "luxury"
+        elif template_type == "wellness":
+            store_name = "Solara Wellness"
+            theme = "green"
+            accent = "#10b981"
+            secondary = "#34d399"
+            design_style = "soft"
+        elif template_type == "food":
+            store_name = "Golden Grind Co."
+            theme = "orange"
+            accent = "#f59e0b"
+            secondary = "#92400e"
+            design_style = "bold"
+        elif template_type == "art":
+            store_name = "Brushstroke Studio"
+            theme = "purple"
+            accent = "#8b5cf6"
+            secondary = "#ede9fe"
+            design_style = "editorial"
+        elif template_type == "sports":
+            store_name = "Apex Athletic"
+            theme = "dark"
+            accent = "#ef4444"
+            secondary = "#1f2937"
+            design_style = "bold"
         else:
             store_name = "The Learning Vault"
             theme = "blue"
@@ -1841,7 +2445,7 @@ def signup(email: str = Form(...), password: str = Form(...), confirm_password: 
     conn.close()
 
     response = RedirectResponse("/dashboard", status_code=303)
-    response.set_cookie("LaunchFlow_user", user["email"], max_age=60 * 60 * 24 * 30)
+    response.set_cookie("LaunchFlow_user", _make_session_cookie(user["email"]), max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax")
     return response
 
 
@@ -1877,6 +2481,7 @@ def login_page(error: str = ""):
             </form>
 
             <p class="auth-switch">New here? <a href="/signup">Start Free</a></p>
+            <p class="auth-switch"><a href="/forgot-password">Forgot password?</a></p>
         </div>
     </div>
 
@@ -1892,14 +2497,26 @@ def login_page(error: str = ""):
 
 
 @app.post("/login")
-def login(email: str = Form(...), password: str = Form(...)):
+def login(request: Request, email: str = Form(...), password: str = Form(...)):
     user = login_user(email, password)
 
     if not user:
         return RedirectResponse("/login?error=invalid", status_code=303)
 
+    # Merge any guest cart items into the logged-in user's account
+    session_id = request.cookies.get("launchflow_cart_id", "")
+    if session_id:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE cart_items SET user_id = ? WHERE session_id = ? AND user_id = 0",
+            (user["id"], session_id)
+        )
+        conn.commit()
+        conn.close()
+
     response = RedirectResponse("/dashboard", status_code=303)
-    response.set_cookie("LaunchFlow_user", user["email"], max_age=60 * 60 * 24 * 30)
+    response.set_cookie("LaunchFlow_user", _make_session_cookie(user["email"]), max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax")
     return response
 
 
@@ -2007,6 +2624,12 @@ def dashboard(request: Request):
                 <a class="button small ghost" href="/stores/{p["slug"]}/pages">Manage Pages</a>
                 <a class="button small ghost" href="/edit/{p["id"]}">Edit</a>
 
+                <form method="post" action="/publish-store/{p["id"]}" style="display:inline">
+                    <button type="submit" class="button small ghost">
+                        {"Unpublish" if p["published"] else "Publish"}
+                    </button>
+                </form>
+
                 <button
                     type="button"
                     class="button small ghost"
@@ -2017,17 +2640,21 @@ def dashboard(request: Request):
             </div>
 
             <div class="store-footer">
-                <span class="copy-link">
-                    /s/{p["slug"]}
-                </span>
-
-                <a
-                    class="danger-link"
-                    href="/delete/{p["id"]}"
-                    onclick="return confirm('Delete this store?')"
+                <button
+                    class="copy-link"
+                    style="background:none;border:none;cursor:pointer;padding:0;text-align:left;font-size:13px;color:rgba(255,255,255,0.7);margin-top:0;"
+                    onclick="var b=this;navigator.clipboard.writeText(window.location.origin+'/s/{p["slug"]}').then(function(){{b.textContent='Copied!'}});setTimeout(function(){{b.textContent='/{p["slug"]}'}},1500)"
+                    title="Click to copy store URL"
                 >
-                    Delete
-                </a>
+                    /{p["slug"]}
+                </button>
+
+                <form method="post" action="/delete/{p["id"]}" style="display:inline"
+                      onsubmit="return confirm('Delete this store? This cannot be undone.')">
+                    <button type="submit" class="danger-link" style="background:none;border:none;cursor:pointer;padding:0;">
+                        Delete
+                    </button>
+                </form>
             </div>
         </div>
         """
@@ -2154,7 +2781,7 @@ def dashboard(request: Request):
             {cards}
         </section>
     </div>
-    """, title="Dashboard")
+    """, title="Dashboard — LaunchFlow")
 
 
 # -----------------------------
@@ -2199,6 +2826,29 @@ def new_product(request: Request):
                     <option value="dark">Clean Dark</option>
                 </select>
 
+                <label>Shipping</label>
+                <select name="shipping_type">
+                    <option value="free">Free Shipping</option>
+                    <option value="flat">Flat Rate</option>
+                    <option value="contact">Contact for Shipping</option>
+                    <option value="pickup">Local Pickup Only</option>
+                </select>
+
+                <input
+                    name="shipping_rate"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Flat rate amount (e.g. 5.99)"
+                    style="display:none"
+                    id="shipping-rate-input"
+                >
+
+                <input
+                    name="shipping_info"
+                    placeholder="Shipping note (e.g. '3-5 business days, US only')"
+                >
+
                 <input type="hidden" name="price" value="0">
                 <input type="hidden" name="stock" value="0">
                 <input type="hidden" name="image_url" value="">
@@ -2209,6 +2859,12 @@ def new_product(request: Request):
             </form>
         </div>
     </div>
+    <script>
+    document.querySelector('[name="shipping_type"]').addEventListener('change', function() {{
+        document.getElementById('shipping-rate-input').style.display =
+            this.value === 'flat' ? 'block' : 'none';
+    }});
+    </script>
     """)
 
 
@@ -2226,16 +2882,24 @@ def create_store(
     theme: str = Form("blue"),
     source: str = Form("manual"),
     ai_design: str = Form("{}"),
+    shipping_type: str = Form("free"),
+    shipping_rate: str = Form("0"),
+    shipping_info: str = Form(""),
     viral_product_name: str = Form(""),
     viral_product_description: str = Form(""),
     viral_product_price: str = Form(""),
     viral_product_stock: str = Form("10"),
+    # NOTE: length truncation applied below after auth check
     viral_product_image_url: str = Form("")
 ):
     user = require_user(request)
 
     if not user:
         return RedirectResponse("/login", status_code=303)
+
+    name = name.strip()[:100]
+    description = description.strip()[:2000]
+    tagline = tagline.strip()[:200]
 
     conn = db()
     cur = conn.cursor()
@@ -2299,6 +2963,20 @@ def create_store(
         final_image_url = image_url
         final_cta = cta or "Buy Now"
 
+    # Sanitize shipping params — they may be FieldInfo objects when called programmatically
+    shipping_type_str  = shipping_type  if isinstance(shipping_type,  str) else "free"
+    shipping_info_str  = shipping_info  if isinstance(shipping_info,  str) else ""
+    shipping_rate_str  = shipping_rate  if isinstance(shipping_rate,  str) else "0"
+
+    final_shipping_rate = 0.0
+    try:
+        final_shipping_rate = float(shipping_rate_str or 0)
+    except Exception:
+        pass
+
+    allowed_shipping = ["free", "flat", "contact", "pickup"]
+    final_shipping_type = shipping_type_str if shipping_type_str in allowed_shipping else "free"
+
     cur.execute("""
     INSERT INTO products (
         user_id,
@@ -2316,9 +2994,12 @@ def create_store(
         ai_design,
         brand_json,
         store_layout,
-        published
+        published,
+        shipping_type,
+        shipping_rate,
+        shipping_info
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     """, (
         user["id"],
         name,
@@ -2333,7 +3014,10 @@ def create_store(
         source,
         ai_design,
         default_brand_json,
-        "default"
+        "default",
+        final_shipping_type,
+        final_shipping_rate,
+        shipping_info_str
     ))
 
     store_id = cur.lastrowid
@@ -2739,7 +3423,7 @@ def discover(request: Request, q: str = "", type: str = "all"):
         </section>
         ''' if show_stores else ''}
     </div>
-    """, title="Discover")
+    """, title="Discover Stores — LaunchFlow")
 
 
 
@@ -2972,6 +3656,9 @@ def save_store_product(
     if not user:
         return RedirectResponse("/login", status_code=303)
 
+    name = name.strip()[:200]
+    description = description.strip()[:2000]
+
     conn = db()
     cur = conn.cursor()
 
@@ -3009,7 +3696,9 @@ def save_store_product(
         safe_base = slugify(os.path.splitext(image.filename)[0]) or "product-image"
 
         try:
+            image.file.seek(0)
             img = Image.open(image.file)
+            img = ImageOps.exif_transpose(img)
 
             if img.mode != "RGB":
                 img = img.convert("RGB")
@@ -3018,11 +3707,9 @@ def save_store_product(
             file_path = os.path.join(UPLOAD_DIR, safe_name)
 
             img.save(file_path, "JPEG", quality=95)
+            uploaded_paths.append(upload_image(file_path))
 
-            uploaded_paths.append(f"/static/uploads/{safe_name}")
-
-        except Exception as e:
-            print("IMAGE SAVE ERROR:", e)
+        except Exception:
             continue
 
     main_image = uploaded_paths[0] if uploaded_paths else ""
@@ -3058,7 +3745,7 @@ def save_store_product(
     conn.commit()
     conn.close()
 
-    return RedirectResponse(f"/s/{slug}#products", status_code=303)
+    return RedirectResponse(f"/s/{slug}?msg=Product+added!#products", status_code=303)
 
 
 
@@ -3391,106 +4078,6 @@ def add_store_product_page(request: Request, slug: str):
 
 
 
-
-@app.post("/stores/{slug}/add-product")
-def save_store_product(
-    request: Request,
-    slug: str,
-    name: str = Form(...),
-    description: str = Form(""),
-    price: str = Form("0"),
-    stock: str = Form("0"),
-    images: List[UploadFile] = File(default=[])
-):
-    user = require_user(request)
-
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT * FROM products WHERE slug = ? AND user_id = ?",
-        (slug, user["id"])
-    )
-    store = cur.fetchone()
-
-    if not store:
-        conn.close()
-        return RedirectResponse("/dashboard", status_code=303)
-
-    cur.execute(
-        "SELECT COUNT(*) as count FROM store_items WHERE store_id = ? AND user_id = ?",
-        (store["id"], user["id"])
-    )
-    product_count = cur.fetchone()["count"]
-
-    if user["is_pro"] == 0 and product_count >= 5:
-        conn.close()
-        return RedirectResponse("/upgrade?reason=product_limit", status_code=303)
-
-    uploaded_paths = []
-
-    for image in images[:10]:
-        if not image or not image.filename:
-            continue
-
-        file_ext = os.path.splitext(image.filename)[1].lower()
-
-        if file_ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"]:
-            continue
-
-        safe_base = slugify(os.path.splitext(image.filename)[0]) or "product-image"
-
-        try:
-            img = Image.open(image.file)
-
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-
-            safe_name = f"{random.randint(100000, 999999)}-{safe_base}.jpg"
-            file_path = os.path.join(UPLOAD_DIR, safe_name)
-
-            img.save(file_path, "JPEG", quality=95)
-
-            uploaded_paths.append(f"/static/uploads/{safe_name}")
-
-        except Exception as e:
-            print("IMAGE SAVE ERROR:", e)
-            continue
-
-    print("UPLOADED PATHS:", uploaded_paths)
-
-    main_image = uploaded_paths[0] if uploaded_paths else ""
-
-    cur.execute("""
-    INSERT INTO store_items (
-        store_id,
-        user_id,
-        name,
-        description,
-        price,
-        stock,
-        image_url,
-        image_urls
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        store["id"],
-        user["id"],
-        name,
-        description,
-        clean_price(price),
-        clean_stock(stock),
-        main_image,
-        json.dumps(uploaded_paths)
-    ))
-
-    conn.commit()
-    conn.close()
-
-    return RedirectResponse(f"/s/{slug}#products", status_code=303)
 
 @app.get("/stores/{slug}/pages", response_class=HTMLResponse)
 def manage_store_pages(request: Request, slug: str):
@@ -4117,12 +4704,21 @@ def move_section_up(request: Request, slug: str, section_id: int):
     section = cur.fetchone()
 
     if section:
-        new_order = max(0, (section["sort_order"] or 0) - 1)
-
+        current_order = section["sort_order"] or 0
         cur.execute(
-            "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
-            (new_order, section_id, store["id"])
+            "SELECT * FROM store_sections WHERE store_id = ? AND sort_order < ? ORDER BY sort_order DESC LIMIT 1",
+            (store["id"], current_order)
         )
+        above = cur.fetchone()
+        if above:
+            cur.execute(
+                "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
+                (above["sort_order"], section_id, store["id"])
+            )
+            cur.execute(
+                "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
+                (current_order, above["id"], store["id"])
+            )
 
     conn.commit()
     conn.close()
@@ -4157,17 +4753,84 @@ def move_section_down(request: Request, slug: str, section_id: int):
     section = cur.fetchone()
 
     if section:
-        new_order = (section["sort_order"] or 0) + 1
-
+        current_order = section["sort_order"] or 0
         cur.execute(
-            "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
-            (new_order, section_id, store["id"])
+            "SELECT * FROM store_sections WHERE store_id = ? AND sort_order > ? ORDER BY sort_order ASC LIMIT 1",
+            (store["id"], current_order)
         )
+        below = cur.fetchone()
+        if below:
+            cur.execute(
+                "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
+                (below["sort_order"], section_id, store["id"])
+            )
+            cur.execute(
+                "UPDATE store_sections SET sort_order = ? WHERE id = ? AND store_id = ?",
+                (current_order, below["id"], store["id"])
+            )
 
     conn.commit()
     conn.close()
 
     return RedirectResponse(f"/stores/{slug}/sections", status_code=303)
+
+
+@app.post("/stores/{slug}/products/{item_id}/move-up")
+def move_product_up(request: Request, slug: str, item_id: int):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM products WHERE slug = ? AND user_id = ?", (slug, user["id"]))
+    store = cur.fetchone()
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+    cur.execute("SELECT * FROM store_items WHERE id = ? AND store_id = ?", (item_id, store["id"]))
+    item = cur.fetchone()
+    if item:
+        current_order = item["sort_order"] or 0
+        cur.execute(
+            "SELECT * FROM store_items WHERE store_id = ? AND sort_order < ? ORDER BY sort_order DESC LIMIT 1",
+            (store["id"], current_order)
+        )
+        above = cur.fetchone()
+        if above:
+            cur.execute("UPDATE store_items SET sort_order = ? WHERE id = ?", (above["sort_order"], item_id))
+            cur.execute("UPDATE store_items SET sort_order = ? WHERE id = ?", (current_order, above["id"]))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/s/{slug}", status_code=303)
+
+
+@app.post("/stores/{slug}/products/{item_id}/move-down")
+def move_product_down(request: Request, slug: str, item_id: int):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM products WHERE slug = ? AND user_id = ?", (slug, user["id"]))
+    store = cur.fetchone()
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+    cur.execute("SELECT * FROM store_items WHERE id = ? AND store_id = ?", (item_id, store["id"]))
+    item = cur.fetchone()
+    if item:
+        current_order = item["sort_order"] or 0
+        cur.execute(
+            "SELECT * FROM store_items WHERE store_id = ? AND sort_order > ? ORDER BY sort_order ASC LIMIT 1",
+            (store["id"], current_order)
+        )
+        below = cur.fetchone()
+        if below:
+            cur.execute("UPDATE store_items SET sort_order = ? WHERE id = ?", (below["sort_order"], item_id))
+            cur.execute("UPDATE store_items SET sort_order = ? WHERE id = ?", (current_order, below["id"]))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/s/{slug}", status_code=303)
 
 
 @app.get("/upgrade", response_class=HTMLResponse)
@@ -4223,7 +4886,7 @@ def upgrade_page(request: Request, reason: str = ""):
             </div>
         </section>
     </div>
-    """, title="Upgrade")
+    """, title="Go Premium — LaunchFlow")
 
 # -----------------------------
 # PUBLIC STORE
@@ -4276,7 +4939,7 @@ def public_store(request: Request, slug: str):
     SELECT *
     FROM store_items
     WHERE store_id = ?
-    ORDER BY created_at DESC
+    ORDER BY sort_order ASC, id ASC
     """, (p["id"],))
     store_items = cur.fetchall()
 
@@ -4352,9 +5015,33 @@ def public_store(request: Request, slug: str):
         or ""
     )
 
-    badge_html = ""
+    # Shipping badge
+    store_shipping_type = p["shipping_type"] if "shipping_type" in p.keys() else "free"
+    store_shipping_rate = p["shipping_rate"] if "shipping_rate" in p.keys() else 0
+    store_shipping_info = p["shipping_info"] if "shipping_info" in p.keys() else ""
 
-    for badge in trust_badges[:3]:
+    shipping_label = {
+        "free":    "Free Shipping",
+        "flat":    f"Shipping: ${money(store_shipping_rate)}",
+        "contact": "Contact for Shipping",
+        "pickup":  "Local Pickup Only",
+    }.get(store_shipping_type or "free", "Free Shipping")
+
+    shipping_note = store_shipping_info or {
+        "free":    "On all orders",
+        "flat":    "Flat rate on all orders",
+        "contact": "Message seller for rates",
+        "pickup":  "In-store pickup only",
+    }.get(store_shipping_type or "free", "On all orders")
+
+    badge_html = f"""
+    <div>
+        <strong>{shipping_label}</strong>
+        <span>{shipping_note}</span>
+    </div>
+    """
+
+    for badge in trust_badges[:2]:
         badge_html += f"""
         <div>
             <strong>{badge}</strong>
@@ -4461,6 +5148,12 @@ def public_store(request: Request, slug: str):
                 <a class="button small ghost" href="/product/{item["id"]}/edit">
                     Edit Product
                 </a>
+                <form method="post" action="/stores/{p["slug"]}/products/{item["id"]}/move-up" style="display:inline">
+                    <button type="submit" class="button small ghost" title="Move Up">↑</button>
+                </form>
+                <form method="post" action="/stores/{p["slug"]}/products/{item["id"]}/move-down" style="display:inline">
+                    <button type="submit" class="button small ghost" title="Move Down">↓</button>
+                </form>
                 """
 
             message_button = ""
@@ -4551,11 +5244,11 @@ def public_store(request: Request, slug: str):
         </button>
         """
 
-    return layout(f"""
-    <div
-        class="public-store theme-{p["theme"]} ai-store ai-design-{design_style} ai-hero-{hero_layout} ai-bg-{background_style} ai-font-{font_style} ai-button-{button_style}"
-        style="--ai-accent:{accent_color}; --ai-secondary:{secondary_color};"
-    >
+    store_css = generate_store_css(ai_design) if ai_design else ""
+
+    return layout(store_css + f"""
+    <div class="public-store ai-custom-store" style="--ai-accent:{accent_color}; --ai-secondary:{secondary_color};">
+
 
         <nav class="public-store-nav">
             <strong>{p["name"]}</strong>
@@ -4570,7 +5263,7 @@ def public_store(request: Request, slug: str):
 
         <section class="storefront-hero ai-section-{section_style}">
             <div class="storefront-hero-content">
-                <p class="eyebrow">Storefront</p>
+                {f'<span class="store-brand-badge">{ai_design.get("primary_category") or ai_design.get("brand_vibe") or "Storefront"}</span>' if ai_design else '<p class="eyebrow">Storefront</p>'}
 
                 <h1>{hero_headline}</h1>
 
@@ -4649,7 +5342,11 @@ def public_store(request: Request, slug: str):
             </div>
         </section>
     </div>
-    """, title=p["name"])
+    """,
+    title=f"{p['name']} — Shop on LaunchFlow",
+    description=p["tagline"] or hero_description or f"Shop {p['name']} on LaunchFlow.",
+    og_image=p["image_url"] or ""
+    )
 
 
 @app.post("/publish-store/{store_id}")
@@ -4662,25 +5359,24 @@ def publish_store(store_id: int, request: Request):
     conn = db()
     cur = conn.cursor()
 
-    cur.execute(
-        """
-        UPDATE products
-        SET published = 1
-        WHERE id = ? AND user_id = ?
-        """,
-        (store_id, user["id"])
-    )
-
-    cur.execute("SELECT slug FROM products WHERE id = ? AND user_id = ?", (store_id, user["id"]))
+    cur.execute("SELECT * FROM products WHERE id = ? AND user_id = ?", (store_id, user["id"]))
     store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    new_status = 0 if store["published"] else 1
+    cur.execute(
+        "UPDATE products SET published = ? WHERE id = ? AND user_id = ?",
+        (new_status, store_id, user["id"])
+    )
 
     conn.commit()
     conn.close()
 
-    if not store:
-        return RedirectResponse("/dashboard", status_code=303)
-
-    return RedirectResponse(f"/s/{store['slug']}", status_code=303)
+    msg = "Store+published!" if new_status else "Store+unpublished."
+    return RedirectResponse(f"/dashboard?msg={msg}", status_code=303)
 
 
 @app.post("/unpublish-store/{store_id}")
@@ -4999,7 +5695,7 @@ def add_to_cart(
     conn.close()
 
     response = RedirectResponse("/cart", status_code=303)
-    response.set_cookie("launchflow_cart_id", session_id, max_age=60 * 60 * 24 * 30)
+    response.set_cookie("launchflow_cart_id", session_id, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax")
 
     return response
 
@@ -5021,6 +5717,14 @@ def edit(request: Request, product_id: int):
 
     if not p:
         return layout("<div class='container'><h1>Store not found</h1></div>")
+
+    try:
+        ai_design_data = json.loads(p["ai_design"] or "{}")
+    except Exception:
+        ai_design_data = {}
+
+    hero_headline_val = ai_design_data.get("hero_headline", "")
+    hero_subheadline_val = ai_design_data.get("hero_subheadline", "")
 
     themes = ["blue", "purple", "green", "orange", "dark"]
     options = ""
@@ -5061,6 +5765,12 @@ def edit(request: Request, product_id: int):
                 <label>Description</label>
                 <textarea name="description" required>{p["description"]}</textarea>
 
+                <label>Hero headline</label>
+                <input name="hero_headline" value="{hero_headline_val}" placeholder="e.g. The last bag you'll ever need">
+
+                <label>Hero subheadline</label>
+                <input name="hero_subheadline" value="{hero_subheadline_val}" placeholder="e.g. Premium quality at an honest price">
+
                 <label>Button text</label>
                 <input name="cta" value="{p["cta"] or "Add Product"}">
 
@@ -5085,6 +5795,8 @@ def update(
     slug: str = Form(...),
     tagline: str = Form(""),
     description: str = Form(...),
+    hero_headline: str = Form(""),
+    hero_subheadline: str = Form(""),
     cta: str = Form("Add Product"),
     theme: str = Form("blue")
 ):
@@ -5098,11 +5810,22 @@ def update(
     conn = db()
     cur = conn.cursor()
 
+    # Merge hero headline/subheadline into the existing ai_design JSON
+    cur.execute("SELECT ai_design FROM products WHERE id = ? AND user_id = ?", (product_id, user["id"]))
+    row = cur.fetchone()
+    try:
+        ai_design_data = json.loads(row["ai_design"] or "{}") if row else {}
+    except Exception:
+        ai_design_data = {}
+
+    ai_design_data["hero_headline"] = hero_headline
+    ai_design_data["hero_subheadline"] = hero_subheadline
+
     cur.execute("""
     UPDATE products
-    SET name = ?, slug = ?, tagline = ?, description = ?, cta = ?, theme = ?
+    SET name = ?, slug = ?, tagline = ?, description = ?, cta = ?, theme = ?, ai_design = ?
     WHERE id = ? AND user_id = ?
-    """, (name, final_slug, tagline, description, cta, theme, product_id, user["id"]))
+    """, (name, final_slug, tagline, description, cta, theme, json.dumps(ai_design_data), product_id, user["id"]))
 
     conn.commit()
     conn.close()
@@ -5110,7 +5833,7 @@ def update(
     return RedirectResponse(f"/s/{final_slug}", status_code=303)
 
 
-@app.get("/delete/{product_id}")
+@app.post("/delete/{product_id}")
 def delete_product(request: Request, product_id: int):
     user = require_user(request)
 
@@ -5201,6 +5924,22 @@ def analytics(request: Request):
     LIMIT 8
     """, (user["id"],))
     recent_orders = cur.fetchall()
+
+    cur.execute("""
+    SELECT
+        products.id,
+        products.name as store_name,
+        products.slug as store_slug,
+        products.views as store_views,
+        COUNT(orders.id) as orders_count,
+        COALESCE(SUM(orders.amount), 0) as revenue
+    FROM products
+    LEFT JOIN orders ON orders.product_id = products.id
+    WHERE products.user_id = ?
+    GROUP BY products.id
+    ORDER BY revenue DESC, orders_count DESC
+    """, (user["id"],))
+    per_store = cur.fetchall()
 
     conn.close()
 
@@ -5301,6 +6040,25 @@ def analytics(request: Request):
                 </div>
             </div>
             {product_rows}
+        </div>
+
+        <div class="panel analytics-panel">
+            <div class="section-header compact">
+                <div>
+                    <p class="eyebrow">Breakdown</p>
+                    <h2>Per-Store Analytics</h2>
+                </div>
+            </div>
+            {"".join(f'''
+            <div class="analytics-row">
+                <div>
+                    <strong><a href="/s/{r["store_slug"]}">{r["store_name"]}</a></strong>
+                    <span>{r["orders_count"]} orders</span>
+                </div>
+                <span>{r["store_views"] or 0} views</span>
+                <strong>${money(r["revenue"])}</strong>
+            </div>
+            ''' for r in per_store) or '<div class="empty-mini"><strong>No stores yet</strong></div>'}
         </div>
 
         <div class="panel analytics-panel">
@@ -5995,9 +6753,6 @@ def settings(request: Request):
 
     pro_status = "Premium" if user["is_pro"] else "Free Plan"
 
-    print("STRIPE ACCOUNT ID:", user["stripe_account_id"])
-    print("ONBOARDING COMPLETE:", user["stripe_onboarding_complete"])
-
     stripe_onboarding_complete = user["stripe_onboarding_complete"]
 
     if user["stripe_account_id"]:
@@ -6033,7 +6788,7 @@ def settings(request: Request):
             conn.close()
 
         except Exception as e:
-            print("SETTINGS STRIPE CHECK ERROR:", e)
+            logger.error("Settings Stripe check error: %s", e)
 
     stripe_ready = bool(
         user["stripe_account_id"] and
@@ -6193,32 +6948,19 @@ def connect_stripe(request: Request):
     cur = conn.cursor()
 
     try:
-        print("CONNECT BUTTON CLICKED")
-        print("User ID:", user["id"])
-
         stripe_account_id = user["stripe_account_id"]
 
         if stripe_account_id:
             account = stripe.Account.retrieve(stripe_account_id)
         else:
             account = stripe.Account.create(
+                type="express",
                 country="US",
                 email=user["email"],
                 capabilities={
                     "card_payments": {"requested": True},
                     "transfers": {"requested": True},
                 },
-                controller={
-                    "fees": {
-                        "payer": "application"
-                    },
-                    "losses": {
-                        "payments": "application"
-                    },
-                    "stripe_dashboard": {
-                        "type": "express"
-                    }
-                }
             )
 
             stripe_account_id = account.id
@@ -6248,7 +6990,7 @@ def connect_stripe(request: Request):
         return RedirectResponse(account_link.url, status_code=303)
 
     except Exception as e:
-        print("Stripe Connect error:", e)
+        logger.error("Stripe Connect error: %s", e)
         conn.close()
 
         return layout(f"""
@@ -6267,7 +7009,22 @@ def connect_stripe(request: Request):
 
 @app.get("/stripe-connect-refresh")
 def stripe_connect_refresh(request: Request):
-    return RedirectResponse("/settings", status_code=303)
+    user = require_user(request)
+
+    if not user or not user["stripe_account_id"]:
+        return RedirectResponse("/settings", status_code=303)
+
+    try:
+        base_url = os.getenv("BASE_URL", "https://launchflow.store").rstrip("/")
+        account_link = stripe.AccountLink.create(
+            account=user["stripe_account_id"],
+            refresh_url=f"{base_url}/stripe-connect-refresh",
+            return_url=f"{base_url}/stripe-connect-return",
+            type="account_onboarding",
+        )
+        return RedirectResponse(account_link.url, status_code=303)
+    except Exception:
+        return RedirectResponse("/settings", status_code=303)
 
 
 @app.get("/stripe-connect-return")
@@ -6290,10 +7047,7 @@ def stripe_connect_return(request: Request):
 
         if not row or not row["stripe_account_id"]:
             conn.close()
-            return RedirectResponse(
-                "/settings?stripe_debug=no_stripe_account_id",
-                status_code=303
-            )
+            return RedirectResponse("/settings", status_code=303)
 
         stripe_account_id = row["stripe_account_id"]
 
@@ -6301,14 +7055,22 @@ def stripe_connect_return(request: Request):
 
         requirements_due = []
         currently_due = []
-        eventually_due = []
 
         if hasattr(account, "requirements") and account.requirements:
             requirements_due = account.requirements.past_due or []
             currently_due = account.requirements.currently_due or []
-            eventually_due = account.requirements.eventually_due or []
 
-        onboarding_complete = account.details_submitted
+        requirements_due = []
+        currently_due = []
+        if hasattr(account, "requirements") and account.requirements:
+            requirements_due = account.requirements.past_due or []
+            currently_due = account.requirements.currently_due or []
+
+        onboarding_complete = bool(
+            account.details_submitted
+            and len(requirements_due) == 0
+            and len(currently_due) == 0
+        )
 
         cur.execute(
             """
@@ -6322,30 +7084,11 @@ def stripe_connect_return(request: Request):
         conn.commit()
         conn.close()
 
-        print("CONNECTED:", onboarding_complete)
-        print("ACCOUNT:", stripe_account_id)
-        print("DETAILS:", account.details_submitted)
-        print("CHARGES:", account.charges_enabled)
-        print("PAYOUTS:", account.payouts_enabled)
-        print("CURRENTLY DUE:", currently_due)
-        print("PAST DUE:", requirements_due)
-        print("EVENTUALLY DUE:", eventually_due)
-
-        return RedirectResponse(
-            f"/settings?stripe_debug=details:{account.details_submitted}-charges:{account.charges_enabled}-payouts:{account.payouts_enabled}-currently_due:{len(currently_due)}-past_due:{len(requirements_due)}",
-            status_code=303
-        )
+        return RedirectResponse("/settings", status_code=303)
 
     except Exception as e:
-        print("STRIPE CONNECT RETURN ERROR")
-        print(str(e))
-
         conn.close()
-
-        return RedirectResponse(
-            f"/settings?stripe_debug=error:{str(e)}",
-            status_code=303
-        )
+        return RedirectResponse("/settings", status_code=303)
 
 
 
@@ -6798,3 +7541,1455 @@ def remove_cart_item(request: Request, cart_item_id: int):
 
     return RedirectResponse("/cart", status_code=303)
 
+
+# -----------------------------
+# PRODUCT EDIT / DELETE
+# -----------------------------
+@app.get("/product/{item_id}/edit", response_class=HTMLResponse)
+def edit_product_page(request: Request, item_id: int):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM store_items WHERE id = ? AND user_id = ?", (item_id, user["id"]))
+    item = cur.fetchone()
+
+    if not item:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute("SELECT * FROM products WHERE id = ?", (item["store_id"],))
+    store = cur.fetchone()
+    conn.close()
+
+    try:
+        image_list = json.loads(item["image_urls"] or "[]")
+    except Exception:
+        image_list = []
+
+    if not image_list and item["image_url"]:
+        image_list = [item["image_url"]]
+
+    current_images_html = ""
+    for img_url in image_list:
+        current_images_html += f"""
+        <div class="image-preview-wrap">
+            <img src="{img_url}" class="image-preview">
+        </div>
+        """
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+
+        <a class="back" href="/product/{item_id}">← Product</a>
+
+        <div class="panel">
+            <p class="eyebrow">Edit Product</p>
+            <h1>{item["name"]}</h1>
+
+            <form action="/product/{item_id}/edit" method="post" enctype="multipart/form-data">
+                <label>Product Name</label>
+                <input name="name" value="{item["name"]}" required>
+
+                <label>Description</label>
+                <textarea name="description" required>{item["description"] or ""}</textarea>
+
+                <label>Price</label>
+                <input name="price" class="money-input" value="${money(item["price"])}" required>
+
+                <label>Stock</label>
+                <input name="stock" type="number" min="0" value="{item["stock"]}" required>
+
+                <label>Current Photos</label>
+                <div class="image-preview-grid">
+                    {current_images_html or "<p class='muted'>No photos yet.</p>"}
+                </div>
+
+                <label>Replace Photos</label>
+                <div class="upload-box" onclick="document.getElementById('edit-product-images').click()">
+                    <strong>Click to select new photos</strong>
+                    <p>Uploading new photos will replace existing ones. Max 10 photos.</p>
+                </div>
+
+                <input
+                    id="edit-product-images"
+                    name="images"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style="display:none;"
+                >
+
+                <div id="edit-image-preview-grid" class="image-preview-grid"></div>
+
+                <button type="submit">Save Changes</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const editInput = document.getElementById("edit-product-images");
+        const editGrid = document.getElementById("edit-image-preview-grid");
+
+        editInput.addEventListener("change", () => {{
+            const files = Array.from(editInput.files).slice(0, 10);
+            editGrid.innerHTML = "";
+            files.forEach(file => {{
+                const wrap = document.createElement("div");
+                wrap.className = "image-preview-wrap";
+                const img = document.createElement("img");
+                img.className = "image-preview";
+                const reader = new FileReader();
+                reader.onload = e => {{ img.src = e.target.result; }};
+                reader.readAsDataURL(file);
+                wrap.appendChild(img);
+                editGrid.appendChild(wrap);
+            }});
+        }});
+    </script>
+    """, title=f"Edit {item['name']}")
+
+
+@app.post("/product/{item_id}/edit")
+def save_product_edit(
+    request: Request,
+    item_id: int,
+    name: str = Form(...),
+    description: str = Form(""),
+    price: str = Form("0"),
+    stock: str = Form("0"),
+    images: List[UploadFile] = File(default=[])
+):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM store_items WHERE id = ? AND user_id = ?", (item_id, user["id"]))
+    item = cur.fetchone()
+
+    if not item:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    uploaded_paths = []
+    valid_images = [img for img in images[:10] if img and img.filename]
+
+    for image in valid_images:
+        file_ext = os.path.splitext(image.filename)[1].lower()
+        if file_ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"]:
+            continue
+
+        safe_base = slugify(os.path.splitext(image.filename)[0]) or "product-image"
+
+        try:
+            image.file.seek(0)
+            img = Image.open(image.file)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            safe_name = f"{random.randint(100000, 999999)}-{safe_base}.jpg"
+            file_path = os.path.join(UPLOAD_DIR, safe_name)
+            img.save(file_path, "JPEG", quality=95)
+            uploaded_paths.append(upload_image(file_path))
+        except Exception:
+            continue
+
+    if not uploaded_paths:
+        try:
+            uploaded_paths = json.loads(item["image_urls"] or "[]")
+        except Exception:
+            uploaded_paths = []
+        if not uploaded_paths and item["image_url"]:
+            uploaded_paths = [item["image_url"]]
+
+    main_image = uploaded_paths[0] if uploaded_paths else ""
+
+    cur.execute("""
+    UPDATE store_items
+    SET name = ?, description = ?, price = ?, stock = ?, image_url = ?, image_urls = ?
+    WHERE id = ? AND user_id = ?
+    """, (
+        name.strip(),
+        description.strip(),
+        clean_price(price),
+        clean_stock(stock),
+        main_image,
+        json.dumps(uploaded_paths),
+        item_id,
+        user["id"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(f"/product/{item_id}", status_code=303)
+
+
+@app.post("/product/{item_id}/delete")
+def delete_store_item(request: Request, item_id: int):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM store_items WHERE id = ? AND user_id = ?", (item_id, user["id"]))
+    item = cur.fetchone()
+
+    if not item:
+        conn.close()
+        return RedirectResponse("/dashboard", status_code=303)
+
+    cur.execute("SELECT slug FROM products WHERE id = ?", (item["store_id"],))
+    store = cur.fetchone()
+    store_slug = store["slug"] if store else None
+
+    cur.execute("DELETE FROM store_items WHERE id = ? AND user_id = ?", (item_id, user["id"]))
+    conn.commit()
+    conn.close()
+
+    if store_slug:
+        return RedirectResponse(f"/s/{store_slug}", status_code=303)
+    return RedirectResponse("/dashboard", status_code=303)
+
+
+# -----------------------------
+# STRIPE CHECKOUT
+# -----------------------------
+@app.post("/checkout-item/{item_id}")
+def checkout_item(
+    request: Request,
+    item_id: int,
+    customer_email: str = Form(...),
+    quantity: int = Form(1)
+):
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM store_items WHERE id = ?", (item_id,))
+    item = cur.fetchone()
+
+    if not item:
+        conn.close()
+        return RedirectResponse("/discover", status_code=303)
+
+    cur.execute("SELECT * FROM products WHERE id = ?", (item["store_id"],))
+    store = cur.fetchone()
+
+    if not store:
+        conn.close()
+        return RedirectResponse("/discover", status_code=303)
+
+    cur.execute("SELECT * FROM users WHERE id = ?", (store["user_id"],))
+    seller = cur.fetchone()
+    conn.close()
+
+    if item["stock"] <= 0:
+        return layout(f"""
+        <div class="container narrow center">
+            <div class="panel">
+                <h1>Sold out</h1>
+                <p>This product is no longer available.</p>
+                <a class="button" href="/s/{store["slug"]}">Back to Store</a>
+            </div>
+        </div>
+        """)
+
+    if not seller or not seller["stripe_account_id"] or not seller["stripe_onboarding_complete"]:
+        return layout(f"""
+        <div class="container narrow center">
+            <div class="panel">
+                <p class="eyebrow">Coming soon</p>
+                <h1>Payments not set up yet</h1>
+                <p>This store is almost ready — the seller hasn't finished connecting their payment account. Check back soon.</p>
+                <a class="button" href="/s/{store["slug"]}">Back to Store</a>
+            </div>
+        </div>
+        """)
+
+    quantity = max(1, min(int(quantity), item["stock"]))
+    unit_amount = int(float(item["price"]) * 100)
+    app_fee = int(unit_amount * quantity * 0.05)
+
+    base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {
+                        "name": item["name"],
+                        "description": (item["description"] or "")[:500],
+                    },
+                    "unit_amount": unit_amount,
+                },
+                "quantity": quantity,
+            }],
+            mode="payment",
+            customer_email=customer_email.strip(),
+            success_url=f"{base_url}/checkout-success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{base_url}/checkout-cancel?item_id={item_id}",
+            payment_intent_data={
+                "transfer_data": {"destination": seller["stripe_account_id"]},
+                "application_fee_amount": app_fee,
+            },
+            shipping_address_collection={"allowed_countries": [
+                "US", "CA", "GB", "AU", "NZ", "IE", "DE", "FR", "NL",
+                "SE", "NO", "DK", "FI", "AT", "BE", "CH", "ES", "IT",
+                "PT", "PL", "JP", "SG", "HK", "MX", "BR",
+            ]},
+            metadata={
+                "item_id": str(item_id),
+                "quantity": str(quantity),
+                "store_id": str(store["id"]),
+                "customer_email": customer_email.strip(),
+            }
+        )
+
+        return RedirectResponse(session.url, status_code=303)
+
+    except Exception as e:
+        logger.error("Checkout error: %s", e)
+        return layout(f"""
+        <div class="container narrow center">
+            <div class="panel">
+                <h1>Checkout Error</h1>
+                <p>We couldn't start checkout. Please try again.</p>
+                <p class="muted" style="font-size:13px;">{str(e)}</p>
+                <a class="button" href="/s/{store["slug"]}">Back to Store</a>
+            </div>
+        </div>
+        """)
+
+
+@app.get("/checkout-success", response_class=HTMLResponse)
+def checkout_success(session_id: str = "", request: Request = None):
+    if not session_id:
+        return RedirectResponse("/", status_code=303)
+
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+
+        if session.payment_status != "paid":
+            return layout("""
+            <div class="container narrow center">
+                <div class="panel">
+                    <h1>Payment Pending</h1>
+                    <p>Your payment is still processing. Check back shortly.</p>
+                    <a class="button" href="/">Back home</a>
+                </div>
+            </div>
+            """)
+
+        item_id = int(session.metadata.get("item_id", 0))
+        quantity = int(session.metadata.get("quantity", 1))
+        store_id = int(session.metadata.get("store_id", 0))
+        customer_email = session.metadata.get("customer_email", "") or session.customer_email or ""
+        amount = float(session.amount_total or 0) / 100
+
+        shipping_name = ""
+        address_line1 = ""
+        address_city = ""
+        address_state = ""
+        address_postal = ""
+        address_country = ""
+
+        if session.shipping_details:
+            try:
+                shipping_name = session.shipping_details.name or ""
+                if session.shipping_details.address:
+                    addr = session.shipping_details.address
+                    address_line1 = addr.line1 or ""
+                    address_city = addr.city or ""
+                    address_state = addr.state or ""
+                    address_postal = addr.postal_code or ""
+                    address_country = addr.country or ""
+            except Exception:
+                pass
+
+        conn = db()
+        cur = conn.cursor()
+
+        is_new_order = False
+        new_order_id = None
+        email_item_name = ""
+        email_store_name = ""
+        email_seller_email = ""
+
+        cur.execute("SELECT id FROM orders WHERE stripe_session_id = ?", (session_id,))
+        if not cur.fetchone():
+            is_new_order = True
+            if item_id:
+                cur.execute(
+                    "UPDATE store_items SET stock = MAX(0, stock - ?) WHERE id = ?",
+                    (quantity, item_id)
+                )
+
+            cur.execute("""
+            INSERT INTO orders (
+                product_id, store_item_id, amount, customer_email,
+                quantity, shipping_name, shipping_address_line1,
+                shipping_city, shipping_state, shipping_postal_code,
+                shipping_country, stripe_session_id, payment_status,
+                shipping_status, fulfillment_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', 'Not shipped yet', 'New order')
+            """, (
+                store_id, item_id, amount, customer_email,
+                quantity, shipping_name, address_line1,
+                address_city, address_state, address_postal,
+                address_country, session_id
+            ))
+
+            new_order_id = cur.lastrowid
+            conn.commit()
+
+            # Gather data for emails while connection is still open
+            cur.execute("SELECT name FROM products WHERE id = ?", (store_id,))
+            row = cur.fetchone()
+            email_store_name = row["name"] if row else "Your Store"
+
+            if item_id:
+                cur.execute("SELECT name FROM store_items WHERE id = ?", (item_id,))
+                row = cur.fetchone()
+                email_item_name = row["name"] if row else email_store_name
+            else:
+                email_item_name = email_store_name
+
+            cur.execute("""
+                SELECT users.email FROM users
+                JOIN products ON users.id = products.user_id
+                WHERE products.id = ?
+            """, (store_id,))
+            row = cur.fetchone()
+            email_seller_email = row["email"] if row else ""
+
+        conn.close()
+
+        if is_new_order and new_order_id:
+            send_order_emails(
+                order_id=new_order_id,
+                item_name=email_item_name,
+                store_name=email_store_name,
+                customer_email=customer_email,
+                seller_email=email_seller_email,
+                amount=amount,
+                quantity=quantity,
+                shipping_name=shipping_name,
+                address_line1=address_line1,
+                city=address_city,
+                state=address_state,
+                postal=address_postal,
+                country=address_country,
+            )
+
+        return layout(f"""
+        <div class="container narrow center">
+            <div class="panel">
+                <p class="eyebrow">Order confirmed</p>
+                <h1>Payment successful!</h1>
+                <p>Thanks for your order, <strong>{customer_email}</strong>.</p>
+
+                <div class="tracking-grid">
+                    <div class="tracking-box">
+                        <span>Amount paid</span>
+                        <strong>${money(amount)}</strong>
+                    </div>
+                    <div class="tracking-box">
+                        <span>Quantity</span>
+                        <strong>{quantity}</strong>
+                    </div>
+                </div>
+
+                <div class="hero-actions">
+                    <a class="button" href="/">Continue Shopping</a>
+                    <a class="button ghost" href="/track">Track Order</a>
+                </div>
+            </div>
+        </div>
+        """, title="Order Confirmed")
+
+    except Exception:
+        return layout("""
+        <div class="container narrow center">
+            <div class="panel">
+                <p class="eyebrow">Order confirmed</p>
+                <h1>Thank you!</h1>
+                <p>Your payment was successful. You'll receive an email confirmation.</p>
+                <a class="button" href="/">Back home</a>
+            </div>
+        </div>
+        """, title="Order Confirmed")
+
+
+@app.get("/checkout-cancel", response_class=HTMLResponse)
+def checkout_cancel(item_id: int = 0):
+    back_link = f"/product/{item_id}" if item_id else "/discover"
+
+    return layout(f"""
+    <div class="container narrow center">
+        <div class="panel">
+            <p class="eyebrow">Checkout cancelled</p>
+            <h1>No charges were made</h1>
+            <p>Your checkout was cancelled. You have not been charged.</p>
+
+            <div class="hero-actions">
+                <a class="button" href="{back_link}">Back to Product</a>
+                <a class="button ghost" href="/discover">Browse Stores</a>
+            </div>
+        </div>
+    </div>
+    """, title="Checkout Cancelled")
+
+
+# -----------------------------
+# PREMIUM UPGRADE CHECKOUT
+# -----------------------------
+@app.post("/create-checkout-session")
+def create_checkout_session(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    if user["is_pro"]:
+        return RedirectResponse("/settings", status_code=303)
+
+    base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {
+                        "name": "LaunchFlow Premium",
+                        "description": "Unlimited stores, AI features, and premium tools.",
+                    },
+                    "unit_amount": PREMIUM_PRICE * 100,
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            customer_email=user["email"],
+            success_url=f"{base_url}/upgrade-success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{base_url}/upgrade",
+            metadata={
+                "user_id": str(user["id"]),
+                "user_email": user["email"],
+                "type": "premium_upgrade",
+            }
+        )
+
+        return RedirectResponse(session.url, status_code=303)
+
+    except Exception:
+        return layout("""
+        <div class="container narrow center">
+            <div class="panel">
+                <h1>Checkout Error</h1>
+                <p>We couldn't start checkout. Please try again.</p>
+                <a class="button" href="/upgrade">Back to Upgrade</a>
+            </div>
+        </div>
+        """)
+
+
+@app.get("/upgrade-success", response_class=HTMLResponse)
+def upgrade_success(session_id: str = "", request: Request = None):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    if session_id:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            if (
+                session.payment_status == "paid"
+                and session.metadata.get("type") == "premium_upgrade"
+            ):
+                conn = db()
+                cur = conn.cursor()
+                cur.execute("UPDATE users SET is_pro = 1 WHERE id = ?", (user["id"],))
+                conn.commit()
+                conn.close()
+        except Exception:
+            pass
+
+    return layout(f"""
+    <div class="container narrow center">
+        <div class="panel">
+            <p class="eyebrow">Upgrade complete</p>
+            <h1>Welcome to Premium!</h1>
+            <p>Your account has been upgraded. You now have access to all LaunchFlow features.</p>
+            <a class="button" href="/dashboard">Go to Dashboard</a>
+        </div>
+    </div>
+    """, title="Premium Activated")
+
+
+@app.get("/manage-subscription", response_class=HTMLResponse)
+def manage_subscription(request: Request):
+    user = require_user(request)
+
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    if not user["is_pro"]:
+        return RedirectResponse("/upgrade", status_code=303)
+
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+
+        <a class="back" href="/settings">← Settings</a>
+
+        <div class="panel">
+            <p class="eyebrow">Subscription</p>
+            <h1>Premium Plan</h1>
+            <p>You're on the LaunchFlow Premium plan with full access to all features.</p>
+
+            <div class="premium-feature-list">
+                <div class="premium-feature-item">Unlimited stores</div>
+                <div class="premium-feature-item">AI store generation</div>
+                <div class="premium-feature-item">Premium templates</div>
+                <div class="premium-feature-item">Advanced store tools</div>
+                <div class="premium-feature-item">Better customization</div>
+                <div class="premium-feature-item">Seller growth features</div>
+            </div>
+
+            <a class="button ghost" href="/settings">Back to Settings</a>
+        </div>
+    </div>
+    """, title="Manage Subscription")
+
+
+# -----------------------------
+# STRIPE WEBHOOK — reliable order creation server-side
+# -----------------------------
+@app.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    if not STRIPE_WEBHOOK_SECRET:
+        return HTMLResponse("Webhook secret not configured", status_code=400)
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        logger.error("Webhook signature error: %s", e)
+        return HTMLResponse("Invalid signature", status_code=400)
+
+    if event.get("type") == "checkout.session.completed":
+        session = event["data"]["object"]
+
+        if session.get("payment_status") != "paid":
+            return HTMLResponse("ok")
+
+        session_id = session.get("id", "")
+        meta = session.get("metadata") or {}
+        item_id = int(meta.get("item_id", 0))
+        store_id = int(meta.get("store_id", 0))
+        quantity = int(meta.get("quantity", 1))
+        customer_email = meta.get("customer_email", "") or session.get("customer_email") or ""
+        amount = float(session.get("amount_total") or 0) / 100
+
+        shipping_name = ""
+        address_line1 = ""
+        address_city = ""
+        address_state = ""
+        address_postal = ""
+        address_country = ""
+
+        shipping_details = session.get("shipping_details") or {}
+        if shipping_details:
+            shipping_name = shipping_details.get("name", "")
+            addr = shipping_details.get("address") or {}
+            address_line1 = addr.get("line1", "")
+            address_city = addr.get("city", "")
+            address_state = addr.get("state", "")
+            address_postal = addr.get("postal_code", "")
+            address_country = addr.get("country", "")
+
+        conn = db()
+        cur = conn.cursor()
+
+        cur.execute("SELECT id FROM orders WHERE stripe_session_id = ?", (session_id,))
+        if cur.fetchone():
+            conn.close()
+            return HTMLResponse("ok")
+
+        if item_id:
+            cur.execute("UPDATE store_items SET stock = MAX(0, stock - ?) WHERE id = ?", (quantity, item_id))
+
+        cur.execute("""
+        INSERT INTO orders (
+            product_id, store_item_id, amount, customer_email,
+            quantity, shipping_name, shipping_address_line1,
+            shipping_city, shipping_state, shipping_postal_code,
+            shipping_country, stripe_session_id, payment_status,
+            shipping_status, fulfillment_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', 'Not shipped yet', 'New order')
+        """, (
+            store_id, item_id, amount, customer_email,
+            quantity, shipping_name, address_line1,
+            address_city, address_state, address_postal,
+            address_country, session_id
+        ))
+
+        new_order_id = cur.lastrowid
+        conn.commit()
+
+        cur.execute("SELECT name FROM products WHERE id = ?", (store_id,))
+        row = cur.fetchone()
+        email_store_name = row["name"] if row else "Your Store"
+
+        if item_id:
+            cur.execute("SELECT name FROM store_items WHERE id = ?", (item_id,))
+            row = cur.fetchone()
+            email_item_name = row["name"] if row else email_store_name
+        else:
+            email_item_name = email_store_name
+
+        cur.execute("""
+            SELECT users.email FROM users
+            JOIN products ON users.id = products.user_id
+            WHERE products.id = ?
+        """, (store_id,))
+        row = cur.fetchone()
+        email_seller_email = row["email"] if row else ""
+
+        conn.close()
+
+        send_order_emails(
+            order_id=new_order_id,
+            item_name=email_item_name,
+            store_name=email_store_name,
+            customer_email=customer_email,
+            seller_email=email_seller_email,
+            amount=amount,
+            quantity=quantity,
+            shipping_name=shipping_name,
+            address_line1=address_line1,
+            city=address_city,
+            state=address_state,
+            postal=address_postal,
+            country=address_country,
+        )
+
+    return HTMLResponse("ok")
+
+
+# -----------------------------
+# PASSWORD RESET
+# -----------------------------
+
+@app.get("/forgot-password", response_class=HTMLResponse)
+def forgot_password_page(sent: str = ""):
+    if sent:
+        return layout("""
+        <div class="auth-page">
+            <div class="auth-card">
+                <p class="eyebrow">Password reset</p>
+                <h1>Check your email</h1>
+                <p>If that email exists in our system, a reset link has been sent.</p>
+                <a class="button" href="/login">Back to Login</a>
+            </div>
+        </div>
+        """)
+
+    return layout("""
+    <div class="auth-page">
+        <div class="auth-card">
+            <p class="eyebrow">Password reset</p>
+            <h1>Forgot password?</h1>
+            <p>Enter your email and we'll send you a reset link.</p>
+
+            <form action="/forgot-password" method="post">
+                <label>Email</label>
+                <input name="email" type="email" required placeholder="you@example.com">
+                <button type="submit">Send Reset Link</button>
+            </form>
+
+            <p class="auth-switch"><a href="/login">Back to Login</a></p>
+        </div>
+    </div>
+    """)
+
+
+@app.post("/forgot-password")
+def forgot_password_submit(email: str = Form(...)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE LOWER(email) = LOWER(?)", (email.strip(),))
+    user = cur.fetchone()
+
+    if user:
+        token = uuid.uuid4().hex
+        expires = int(__import__("time").time()) + 3600
+        cur.execute(
+            "UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?",
+            (token, expires, user["id"])
+        )
+        conn.commit()
+
+        reset_url = f"{BASE_URL}/reset-password?token={token}"
+        html = f"""
+        <div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#0f172a;color:#e2e8f0;padding:32px;border-radius:12px;">
+          <h1 style="color:#7c3aed;font-size:28px;margin:0 0 8px;">Reset your password</h1>
+          <p style="color:#94a3b8;margin:0 0 24px;">Click the button below to set a new password. This link expires in 1 hour.</p>
+          <a href="{reset_url}" style="display:inline-block;background:#7c3aed;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">Reset Password</a>
+          <p style="margin:24px 0 0;font-size:12px;color:#475569;">If you didn't request this, ignore this email.</p>
+        </div>
+        """
+        send_email(email.strip(), "Reset your LaunchFlow password", html)
+
+    conn.close()
+    return RedirectResponse("/forgot-password?sent=1", status_code=303)
+
+
+@app.get("/reset-password", response_class=HTMLResponse)
+def reset_password_page(token: str = ""):
+    if not token:
+        return RedirectResponse("/forgot-password", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM users WHERE reset_token = ? AND reset_token_expires > ?",
+        (token, int(__import__("time").time()))
+    )
+    user = cur.fetchone()
+    conn.close()
+
+    if not user:
+        return layout("""
+        <div class="auth-page">
+            <div class="auth-card">
+                <h1>Link expired</h1>
+                <p>This reset link is invalid or has expired.</p>
+                <a class="button" href="/forgot-password">Request a new one</a>
+            </div>
+        </div>
+        """)
+
+    return layout(f"""
+    <div class="auth-page">
+        <div class="auth-card">
+            <p class="eyebrow">Password reset</p>
+            <h1>Set new password</h1>
+
+            <form action="/reset-password" method="post">
+                <input type="hidden" name="token" value="{token}">
+                <label>New Password</label>
+                <input name="password" type="password" required placeholder="At least 8 characters" minlength="8">
+                <button type="submit">Set Password</button>
+            </form>
+        </div>
+    </div>
+    """)
+
+
+@app.post("/reset-password")
+def reset_password_submit(token: str = Form(""), password: str = Form("")):
+    if not token or len(password) < 8:
+        return RedirectResponse("/forgot-password", status_code=303)
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM users WHERE reset_token = ? AND reset_token_expires > ?",
+        (token, int(__import__("time").time()))
+    )
+    user = cur.fetchone()
+
+    if not user:
+        conn.close()
+        return RedirectResponse("/forgot-password", status_code=303)
+
+    new_hash = hash_password(password)
+    cur.execute(
+        "UPDATE users SET password = ?, reset_token = '', reset_token_expires = 0 WHERE id = ?",
+        (new_hash, user["id"])
+    )
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse("/login", status_code=303)
+
+
+# -----------------------------
+# AI PRODUCT COPY GENERATOR
+# -----------------------------
+@app.get("/ai-product-copy", response_class=HTMLResponse)
+def ai_product_copy_page(request: Request):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+        <a class="back" href="/dashboard">← Dashboard</a>
+        <div class="panel">
+            <p class="eyebrow">AI Dropshipping Tool</p>
+            <h1>AI Product Copy Generator</h1>
+            <p>Enter your product and get a full set of ready-to-use copy — description, bullets, Facebook ad, TikTok hook, and email subject.</p>
+
+            <label>Product Name</label>
+            <input id="cp-name" placeholder="e.g. Posture Corrector Belt" />
+
+            <label>Product Niche / Angle</label>
+            <input id="cp-angle" placeholder="e.g. people who sit at a desk all day and have back pain" />
+
+            <label>Selling Price ($)</label>
+            <input id="cp-price" type="number" step="0.01" placeholder="e.g. 29.99" />
+
+            <button onclick="generateCopy(this)" style="margin-top:16px;">Generate Copy ✨</button>
+
+            <div id="cp-status" style="margin-top:12px;font-size:14px;color:#7c3aed;display:none;">Generating...</div>
+
+            <div id="cp-result" style="display:none;margin-top:20px;">
+                <div class="cp-section">
+                    <div class="cp-label">📦 Product Description</div>
+                    <div class="cp-box" id="cp-desc"></div>
+                    <button class="copy-btn" onclick="copyBox('cp-desc')">Copy</button>
+                </div>
+                <div class="cp-section">
+                    <div class="cp-label">✅ Bullet Points</div>
+                    <div class="cp-box" id="cp-bullets"></div>
+                    <button class="copy-btn" onclick="copyBox('cp-bullets')">Copy</button>
+                </div>
+                <div class="cp-section">
+                    <div class="cp-label">📘 Facebook Ad Copy</div>
+                    <div class="cp-box" id="cp-fb"></div>
+                    <button class="copy-btn" onclick="copyBox('cp-fb')">Copy</button>
+                </div>
+                <div class="cp-section">
+                    <div class="cp-label">🎵 TikTok Hook</div>
+                    <div class="cp-box" id="cp-tiktok"></div>
+                    <button class="copy-btn" onclick="copyBox('cp-tiktok')">Copy</button>
+                </div>
+                <div class="cp-section">
+                    <div class="cp-label">📧 Email Subject Line</div>
+                    <div class="cp-box" id="cp-email"></div>
+                    <button class="copy-btn" onclick="copyBox('cp-email')">Copy</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+    .cp-section {{ margin-bottom:18px; }}
+    .cp-label {{ font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#7c3aed;margin-bottom:6px; }}
+    .cp-box {{ background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px;font-size:14px;line-height:1.6;white-space:pre-wrap;color:#e2e8f0;min-height:48px; }}
+    .copy-btn {{ margin-top:6px;padding:6px 14px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer; }}
+    .copy-btn:hover {{ background:#334155;color:#e2e8f0; }}
+    </style>
+
+    <script>
+    async function generateCopy(btn) {{
+        const name = document.getElementById('cp-name').value.trim();
+        const angle = document.getElementById('cp-angle').value.trim();
+        const price = document.getElementById('cp-price').value.trim();
+        if (!name) {{ alert('Enter a product name'); return; }}
+        btn.disabled = true;
+        btn.textContent = 'Generating...';
+        document.getElementById('cp-status').style.display = 'block';
+        document.getElementById('cp-result').style.display = 'none';
+        try {{
+            const r = await fetch('/ai-product-copy', {{
+                method: 'POST',
+                headers: {{'Content-Type':'application/json'}},
+                body: JSON.stringify({{name, angle, price}})
+            }});
+            const d = await r.json();
+            if (!d.ok) {{ alert(d.error || 'Error generating copy'); return; }}
+            document.getElementById('cp-desc').textContent = d.description;
+            document.getElementById('cp-bullets').textContent = d.bullets;
+            document.getElementById('cp-fb').textContent = d.facebook_ad;
+            document.getElementById('cp-tiktok').textContent = d.tiktok_hook;
+            document.getElementById('cp-email').textContent = d.email_subject;
+            document.getElementById('cp-result').style.display = 'block';
+        }} catch(e) {{ alert('Something went wrong'); }}
+        finally {{
+            btn.disabled = false;
+            btn.textContent = 'Generate Copy ✨';
+            document.getElementById('cp-status').style.display = 'none';
+        }}
+    }}
+    function copyBox(id) {{
+        const text = document.getElementById(id).textContent;
+        navigator.clipboard.writeText(text).then(() => {{
+            const btn = document.getElementById(id).nextElementSibling;
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 2000);
+        }});
+    }}
+    </script>
+    """, title="AI Product Copy")
+
+
+@app.post("/ai-product-copy")
+async def ai_product_copy_generate(request: Request):
+    user = require_user(request)
+    if not user:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": "Not logged in"}, status_code=401)
+    try:
+        body = await request.json()
+        name = str(body.get("name", "")).strip()[:200]
+        angle = str(body.get("angle", "")).strip()[:300]
+        price = str(body.get("price", "")).strip()[:20]
+        if not name:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"ok": False, "error": "Product name required"})
+
+        prompt = f"""You are an expert dropshipping copywriter. Write high-converting copy for this product.
+
+PRODUCT: {name}
+ANGLE / TARGET CUSTOMER: {angle or "general consumers"}
+SELLING PRICE: ${price or "29.99"}
+
+Write the following sections. Be specific, benefit-focused, and conversion-optimized.
+
+Return a JSON object with these exact keys:
+- description: 2-3 sentence product description (benefits-first, no fluff)
+- bullets: 5 bullet points starting with ✓ (key benefits and features)
+- facebook_ad: A complete Facebook ad copy block (headline, body, CTA). Make it scroll-stopping.
+- tiktok_hook: One powerful TikTok/Reels opening hook (first 3 seconds, under 15 words, creates curiosity or pain)
+- email_subject: 3 email subject line options that would get high open rates
+
+Return only valid JSON, no markdown."""
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1200,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = resp.content[0].text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```json?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text).strip()
+        data = json.loads(text)
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": True, **data})
+    except Exception as e:
+        logger.error("AI product copy error: %s", e)
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": "Generation failed — try again"}, status_code=500)
+
+
+# -----------------------------
+# PROFIT MARGIN CALCULATOR
+# -----------------------------
+@app.get("/profit-calculator", response_class=HTMLResponse)
+def profit_calculator(request: Request):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    return layout(f"""
+    <div class="container narrow">
+        {top_nav(user)}
+        <a class="back" href="/dashboard">← Dashboard</a>
+        <div class="panel">
+            <p class="eyebrow">Dropshipping Tool</p>
+            <h1>Profit Margin Calculator</h1>
+            <p>Enter your costs and selling price to see real profit numbers including Stripe fees.</p>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:20px;">
+                <div>
+                    <label>Selling Price ($)</label>
+                    <input id="pc-sell" type="number" step="0.01" placeholder="29.99" oninput="calcProfit()" />
+                </div>
+                <div>
+                    <label>Supplier Cost ($)</label>
+                    <input id="pc-cost" type="number" step="0.01" placeholder="8.00" oninput="calcProfit()" />
+                </div>
+                <div>
+                    <label>Shipping Cost ($)</label>
+                    <input id="pc-ship" type="number" step="0.01" placeholder="3.00" oninput="calcProfit()" />
+                </div>
+                <div>
+                    <label>Ad Spend per Sale ($)</label>
+                    <input id="pc-ads" type="number" step="0.01" placeholder="0.00" oninput="calcProfit()" />
+                </div>
+            </div>
+
+            <div style="margin-top:8px;padding:10px 14px;background:#0f172a;border-radius:10px;border:1px solid #1e293b;">
+                <label style="margin:0;font-size:13px;color:#64748b;">Stripe fee (2.9% + $0.30) is auto-included</label>
+            </div>
+
+            <div id="pc-result" style="margin-top:24px;display:none;">
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px;">
+                    <div class="stat-box">
+                        <div class="stat-val" id="pc-net">$0.00</div>
+                        <div class="stat-label">Net Profit</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" id="pc-margin">0%</div>
+                        <div class="stat-label">Margin</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" id="pc-roas">0x</div>
+                        <div class="stat-label">Break-even ROAS</div>
+                    </div>
+                </div>
+                <div id="pc-breakdown" style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px;font-size:14px;line-height:2;color:#94a3b8;"></div>
+                <div id="pc-verdict" style="margin-top:12px;padding:12px 16px;border-radius:10px;font-weight:700;font-size:14px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+    .stat-box {{ background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:16px;text-align:center; }}
+    .stat-val {{ font-size:24px;font-weight:800;color:#7c3aed;line-height:1; }}
+    .stat-label {{ font-size:12px;color:#64748b;margin-top:4px; }}
+    </style>
+
+    <script>
+    function calcProfit() {{
+        const sell = parseFloat(document.getElementById('pc-sell').value) || 0;
+        const cost = parseFloat(document.getElementById('pc-cost').value) || 0;
+        const ship = parseFloat(document.getElementById('pc-ship').value) || 0;
+        const ads  = parseFloat(document.getElementById('pc-ads').value)  || 0;
+        if (sell <= 0) {{ document.getElementById('pc-result').style.display='none'; return; }}
+        const stripeFee = sell * 0.029 + 0.30;
+        const totalCost = cost + ship + ads + stripeFee;
+        const net = sell - totalCost;
+        const margin = sell > 0 ? (net / sell) * 100 : 0;
+        const roas = ads > 0 ? sell / ads : 0;
+        document.getElementById('pc-net').textContent = '$' + net.toFixed(2);
+        document.getElementById('pc-margin').textContent = margin.toFixed(1) + '%';
+        document.getElementById('pc-roas').textContent = roas > 0 ? roas.toFixed(1) + 'x' : '—';
+        document.getElementById('pc-breakdown').innerHTML =
+            `Revenue: <strong style="color:#e2e8f0">$${{sell.toFixed(2)}}</strong><br>` +
+            `Supplier cost: <strong style="color:#e2e8f0">-$${{cost.toFixed(2)}}</strong><br>` +
+            `Shipping: <strong style="color:#e2e8f0">-$${{ship.toFixed(2)}}</strong><br>` +
+            `Ad spend: <strong style="color:#e2e8f0">-$${{ads.toFixed(2)}}</strong><br>` +
+            `Stripe fee (2.9%+$0.30): <strong style="color:#e2e8f0">-$${{stripeFee.toFixed(2)}}</strong><br>` +
+            `<strong style="color:#7c3aed">Net profit: $${{net.toFixed(2)}}</strong>`;
+        const verdict = document.getElementById('pc-verdict');
+        if (net < 0) {{
+            verdict.style.background='#450a0a'; verdict.style.color='#fca5a5';
+            verdict.textContent = '⚠️ You would LOSE money on this product at these numbers. Raise the price or find a cheaper supplier.';
+        }} else if (margin < 20) {{
+            verdict.style.background='#431407'; verdict.style.color='#fdba74';
+            verdict.textContent = '⚡ Thin margin. Consider raising price or cutting costs — under 20% is risky once refunds hit.';
+        }} else if (margin < 40) {{
+            verdict.style.background='#1e3a5f'; verdict.style.color='#93c5fd';
+            verdict.textContent = '✅ Decent margin. Viable product — watch your ad spend carefully.';
+        }} else {{
+            verdict.style.background='#052e16'; verdict.style.color='#86efac';
+            verdict.textContent = '🔥 Strong margin! This product can handle ad spend and refunds and still be profitable.';
+        }}
+        document.getElementById('pc-result').style.display = 'block';
+    }}
+    </script>
+    """, title="Profit Calculator")
+
+
+# -----------------------------
+# SUPPLIER MANAGER
+# -----------------------------
+@app.get("/suppliers", response_class=HTMLResponse)
+def suppliers_page(request: Request):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM suppliers WHERE user_id = ? ORDER BY id DESC", (user["id"],))
+    suppliers = cur.fetchall()
+    conn.close()
+
+    rows = ""
+    for s in suppliers:
+        status_badge = '<span style="color:#10b981;font-size:12px;font-weight:700;">Active</span>' if s["is_active"] else '<span style="color:#64748b;font-size:12px;">Inactive</span>'
+        url_link = f'<a href="{s["url"]}" target="_blank" style="color:#7c3aed;font-size:13px;" rel="noopener">View Supplier ↗</a>' if s["url"] else "—"
+        rows += f"""
+        <tr>
+            <td><strong>{s["name"]}</strong></td>
+            <td>{url_link}</td>
+            <td style="color:#94a3b8;">{s["contact_email"] or "—"}</td>
+            <td>{s["shipping_days"]} days</td>
+            <td>{status_badge}</td>
+            <td style="color:#94a3b8;font-size:13px;max-width:200px;">{(s["notes"] or "")[:80]}</td>
+            <td>
+                <form method="post" action="/suppliers/{s["id"]}/delete" style="display:inline;">
+                    <button type="submit" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:0;">Delete</button>
+                </form>
+            </td>
+        </tr>"""
+
+    empty = '<tr><td colspan="7" style="text-align:center;color:#475569;padding:32px;">No suppliers yet. Add your first one below.</td></tr>' if not suppliers else ""
+
+    return layout(f"""
+    <div class="container">
+        {top_nav(user)}
+        <a class="back" href="/dashboard">← Dashboard</a>
+        <div class="panel">
+            <p class="eyebrow">Dropshipping Tool</p>
+            <h1>Supplier Manager</h1>
+            <p>Keep track of all your suppliers, their URLs, shipping times, and notes in one place.</p>
+
+            <div style="overflow-x:auto;margin-bottom:28px;">
+                <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                    <thead>
+                        <tr style="border-bottom:1px solid #1e293b;color:#64748b;font-size:12px;text-align:left;">
+                            <th style="padding:10px 8px;">Name</th>
+                            <th style="padding:10px 8px;">Supplier URL</th>
+                            <th style="padding:10px 8px;">Contact</th>
+                            <th style="padding:10px 8px;">Ship Time</th>
+                            <th style="padding:10px 8px;">Status</th>
+                            <th style="padding:10px 8px;">Notes</th>
+                            <th style="padding:10px 8px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows}
+                        {empty}
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 style="font-size:18px;margin:0 0 14px;">Add Supplier</h2>
+            <form method="post" action="/suppliers" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <label>Supplier Name *</label>
+                    <input name="name" required placeholder="e.g. AliExpress Vendor A" />
+                </div>
+                <div>
+                    <label>Supplier URL</label>
+                    <input name="url" placeholder="https://aliexpress.com/item/..." />
+                </div>
+                <div>
+                    <label>Contact Email</label>
+                    <input name="contact_email" type="email" placeholder="supplier@example.com" />
+                </div>
+                <div>
+                    <label>Avg. Shipping Days</label>
+                    <input name="shipping_days" type="number" value="7" min="1" />
+                </div>
+                <div style="grid-column:span 2;">
+                    <label>Notes</label>
+                    <textarea name="notes" placeholder="Minimum order, quality notes, communication tips..." style="min-height:80px;"></textarea>
+                </div>
+                <div style="grid-column:span 2;">
+                    <button type="submit">Add Supplier</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    """, title="Supplier Manager")
+
+
+@app.post("/suppliers")
+def add_supplier(request: Request, name: str = Form(...), url: str = Form(""),
+                 contact_email: str = Form(""), shipping_days: int = Form(7),
+                 notes: str = Form("")):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO suppliers (user_id, name, url, contact_email, shipping_days, notes) VALUES (?, ?, ?, ?, ?, ?)",
+        (user["id"], name.strip(), url.strip(), contact_email.strip(), shipping_days, notes.strip())
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/suppliers", status_code=303)
+
+
+@app.post("/suppliers/{supplier_id}/delete")
+def delete_supplier(supplier_id: int, request: Request):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM suppliers WHERE id = ? AND user_id = ?", (supplier_id, user["id"]))
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/suppliers", status_code=303)
+
+
+# -----------------------------
+# DISCOUNT CODES
+# -----------------------------
+@app.get("/discounts", response_class=HTMLResponse)
+def discounts_page(request: Request):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM discount_codes WHERE user_id = ? ORDER BY id DESC", (user["id"],))
+    codes = cur.fetchall()
+    conn.close()
+
+    rows = ""
+    for c in codes:
+        val_str = f"{int(c['value'])}%" if c["discount_type"] == "percentage" else f"${c['value']:.2f} off"
+        max_str = str(c["max_uses"]) if c["max_uses"] else "Unlimited"
+        status_html = '<span style="color:#10b981;font-weight:700;font-size:12px;">Active</span>' if c["is_active"] else '<span style="color:#64748b;font-size:12px;">Inactive</span>'
+        expires = (c["expires_at"] or "")[:10] or "Never"
+        rows += f"""
+        <tr>
+            <td><strong style="font-family:monospace;letter-spacing:.05em;">{c["code"]}</strong></td>
+            <td>{val_str}</td>
+            <td>{c["uses_count"]} / {max_str}</td>
+            <td>{expires}</td>
+            <td>{status_html}</td>
+            <td style="display:flex;gap:8px;align-items:center;">
+                <form method="post" action="/discounts/{c["id"]}/toggle" style="display:inline;">
+                    <button type="submit" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:13px;padding:0;">
+                        {'Deactivate' if c["is_active"] else 'Activate'}
+                    </button>
+                </form>
+                <form method="post" action="/discounts/{c["id"]}/delete" style="display:inline;">
+                    <button type="submit" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:0;">Delete</button>
+                </form>
+            </td>
+        </tr>"""
+
+    empty = '<tr><td colspan="6" style="text-align:center;color:#475569;padding:32px;">No discount codes yet.</td></tr>' if not codes else ""
+
+    return layout(f"""
+    <div class="container">
+        {top_nav(user)}
+        <a class="back" href="/dashboard">← Dashboard</a>
+        <div class="panel">
+            <p class="eyebrow">Marketing Tool</p>
+            <h1>Discount Codes</h1>
+            <p>Create percentage or fixed-amount discount codes for your marketing campaigns.</p>
+
+            <div style="overflow-x:auto;margin-bottom:28px;">
+                <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                    <thead>
+                        <tr style="border-bottom:1px solid #1e293b;color:#64748b;font-size:12px;text-align:left;">
+                            <th style="padding:10px 8px;">Code</th>
+                            <th style="padding:10px 8px;">Discount</th>
+                            <th style="padding:10px 8px;">Uses</th>
+                            <th style="padding:10px 8px;">Expires</th>
+                            <th style="padding:10px 8px;">Status</th>
+                            <th style="padding:10px 8px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows}
+                        {empty}
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 style="font-size:18px;margin:0 0 14px;">Create Discount Code</h2>
+            <form method="post" action="/discounts" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <label>Code (leave blank to auto-generate)</label>
+                    <input name="code" placeholder="e.g. SAVE20" style="text-transform:uppercase;" />
+                </div>
+                <div>
+                    <label>Discount Type</label>
+                    <select name="discount_type">
+                        <option value="percentage">Percentage (%) off</option>
+                        <option value="fixed">Fixed amount ($) off</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Discount Value</label>
+                    <input name="value" type="number" step="0.01" required placeholder="e.g. 20 for 20% or $20 off" />
+                </div>
+                <div>
+                    <label>Max Uses (0 = unlimited)</label>
+                    <input name="max_uses" type="number" value="0" min="0" />
+                </div>
+                <div>
+                    <label>Expiry Date (optional)</label>
+                    <input name="expires_at" type="date" />
+                </div>
+                <div style="display:flex;align-items:flex-end;">
+                    <button type="submit" style="width:100%;">Create Code</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    """, title="Discount Codes")
+
+
+@app.post("/discounts")
+def create_discount(request: Request, code: str = Form(""), discount_type: str = Form("percentage"),
+                    value: float = Form(...), max_uses: int = Form(0), expires_at: str = Form("")):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    final_code = code.strip().upper() or ("SAVE" + str(random.randint(1000, 9999)))
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO discount_codes (user_id, code, discount_type, value, max_uses, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user["id"], final_code, discount_type, value, max_uses, expires_at.strip() or "")
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/discounts", status_code=303)
+
+
+@app.post("/discounts/{code_id}/toggle")
+def toggle_discount(code_id: int, request: Request):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT is_active FROM discount_codes WHERE id = ? AND user_id = ?", (code_id, user["id"]))
+    row = cur.fetchone()
+    if row:
+        cur.execute("UPDATE discount_codes SET is_active = ? WHERE id = ? AND user_id = ?",
+                    (0 if row["is_active"] else 1, code_id, user["id"]))
+        conn.commit()
+    conn.close()
+    return RedirectResponse("/discounts", status_code=303)
+
+
+@app.post("/discounts/{code_id}/delete")
+def delete_discount(code_id: int, request: Request):
+    user = require_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM discount_codes WHERE id = ? AND user_id = ?", (code_id, user["id"]))
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/discounts", status_code=303)
+
+
+# -----------------------------
+# CLEAN STORE URLs  /{slug} → /s/{slug}
+# Must be last route so it doesn't shadow any real paths
+# -----------------------------
+@app.get("/{slug}", response_class=HTMLResponse)
+def store_shortlink(slug: str, request: Request):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM products WHERE slug = ?", (slug,))
+    store = cur.fetchone()
+    conn.close()
+    if store:
+        return RedirectResponse(f"/s/{slug}", status_code=301)
+    return HTMLResponse("<h1>Not found</h1>", status_code=404)
